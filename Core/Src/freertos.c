@@ -150,7 +150,7 @@ void StartTask02(void *argument)
   {
     osDelay(1);
 
-    //hi22222ss
+    
   }
   /* USER CODE END StartTask02 */
 }
