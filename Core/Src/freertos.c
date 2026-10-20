@@ -19,6 +19,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
+#include "stm32h7xx_hal.h"
 #include "task.h"
 #include "main.h"
 #include "FreeRTOS.h"
@@ -148,6 +149,8 @@ void StartTask02(void *argument)
   for(;;)
   {
     osDelay(1);
+
+    //hi22222ss
   }
   /* USER CODE END StartTask02 */
 }
