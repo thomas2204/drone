@@ -1,0 +1,18 @@
+source /opt/ros/humble/setup.zsh
+source ~/thomas_nav_ws/install/local_setup.zsh
+
+ros2 run robocon_traversability terrain_map_node \
+  --ros-args \
+  --params-file ~/thomas_nav_ws/src/thomas_lidar_localiztion/src/robocon_traversability/config/terrain_map.yaml
+
+
+source /opt/ros/humble/setup.zsh
+source ~/thomas_nav_ws/install/local_setup.zsh
+
+ros2 launch robocon_nav2 planner.launch.py
+
+
+source /opt/ros/humble/setup.zsh
+source ~/thomas_nav_ws/install/local_setup.zsh
+
+ros2 run robocon_nav2 rviz_path_planner
