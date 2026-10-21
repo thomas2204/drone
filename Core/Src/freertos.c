@@ -62,6 +62,13 @@ const osThreadAttr_t uart_bluetooth_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for led_blink */
+osThreadId_t led_blinkHandle;
+const osThreadAttr_t led_blink_attributes = {
+  .name = "led_blink",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -70,6 +77,7 @@ const osThreadAttr_t uart_bluetooth_attributes = {
 
 void StartDefaultTask(void *argument);
 void StartTask02(void *argument);
+void led_blink1(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -105,6 +113,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of uart_bluetooth */
   uart_bluetoothHandle = osThreadNew(StartTask02, NULL, &uart_bluetooth_attributes);
+
+  /* creation of led_blink */
+  led_blinkHandle = osThreadNew(led_blink1, NULL, &led_blink_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -152,6 +163,25 @@ void StartTask02(void *argument)
     
   }
   /* USER CODE END StartTask02 */
+}
+
+/* USER CODE BEGIN Header_led_blink1 */
+/**
+* @brief Function implementing the led_blink thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_led_blink1 */
+void led_blink1(void *argument)
+{
+  /* USER CODE BEGIN led_blink1 */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(500);
+    HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
+  }
+  /* USER CODE END led_blink1 */
 }
 
 /* Private application code --------------------------------------------------*/
