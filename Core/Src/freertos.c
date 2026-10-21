@@ -19,7 +19,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
-#include "stm32h7xx_hal.h"
 #include "task.h"
 #include "main.h"
 #include "FreeRTOS.h"
