@@ -23,6 +23,7 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+#include "USART.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -76,7 +77,7 @@ const osThreadAttr_t led_blink_attributes = {
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
-void StartTask02(void *argument);
+void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -112,7 +113,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of uart_bluetooth */
-  uart_bluetoothHandle = osThreadNew(StartTask02, NULL, &uart_bluetooth_attributes);
+  uart_bluetoothHandle = osThreadNew(BLUETOOTH, NULL, &uart_bluetooth_attributes);
 
   /* creation of led_blink */
   led_blinkHandle = osThreadNew(led_blink1, NULL, &led_blink_attributes);
@@ -145,24 +146,29 @@ void StartDefaultTask(void *argument)
   /* USER CODE END StartDefaultTask */
 }
 
-/* USER CODE BEGIN Header_StartTask02 */
+/* USER CODE BEGIN Header_BLUETOOTH */
 /**
 * @brief Function implementing the uart_bluetooth thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartTask02 */
-void StartTask02(void *argument)
+/* USER CODE END Header_BLUETOOTH */
+void BLUETOOTH(void *argument)
 {
-  /* USER CODE BEGIN StartTask02 */
+  /* USER CODE BEGIN BLUETOOTH */
   /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
+  const char msg[] = "Hello from FreeRTOS!\r\n";
 
-    
-  }
-  /* USER CODE END StartTask02 */
+    for (;;)
+    {
+        HAL_UART_Transmit(&huart7,
+                          (uint8_t *)msg,
+                          sizeof(msg) - 1,
+                          1000);
+
+        osDelay(1000);
+    }
+  /* USER CODE END BLUETOOTH */
 }
 
 /* USER CODE BEGIN Header_led_blink1 */
