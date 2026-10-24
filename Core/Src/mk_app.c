@@ -18,7 +18,9 @@
 // =====================================
 
 #define MAV_UART           huart1
-#define MAV_RX_DMA_SIZE    1024U
+#define MAV_RX_DMA_SIZE 1024
+#define MAV_TX_DMA_SIZE 512
+
 
 // =====================================
 // DMA buffer
@@ -31,9 +33,12 @@
 // Make sure your linker places this buffer
 // in AXI SRAM or D2 SRAM.
 
-static uint8_t dma_rx[MAV_RX_DMA_SIZE]
-    __attribute__((aligned(32)));
 
+static uint8_t dma_rx[MAV_RX_DMA_SIZE]
+    __attribute__((section(".dma_buffer"), aligned(32)));
+
+static uint8_t dma_tx[MAV_TX_DMA_SIZE]
+    __attribute__((section(".dma_buffer"), aligned(32)));
 static uint16_t old_pos = 0;
 
 // =====================================
