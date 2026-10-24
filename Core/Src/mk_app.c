@@ -148,12 +148,13 @@ void MAVLink_Task(void)
 
     memset(&msg, 0, sizeof(msg));
     memset(&status, 0, sizeof(status));
-
+    /*
     // Clean cache state before starting DMA
     SCB_InvalidateDCache_by_Addr(
         (uint32_t *)dma_rx,
         MAV_RX_DMA_SIZE
     );
+    */
 
     if (HAL_UART_Receive_DMA(
         &MAV_UART,
@@ -167,7 +168,7 @@ void MAVLink_Task(void)
     // so don't need half/full interrupts.
     __HAL_DMA_DISABLE_IT(
         MAV_UART.hdmarx,
-        DMA_IT_HT | DMA_IT_TC
+        DMA_IT_HT
     );
 
     old_pos = 0;
@@ -185,12 +186,13 @@ void MAVLink_Task(void)
 
         if (pos != old_pos)
         {
+            /*
             // DMA may have updated cacheable SRAM
             SCB_InvalidateDCache_by_Addr(
                 (uint32_t *)dma_rx,
                 MAV_RX_DMA_SIZE
             );
-
+            */
             // Process all newly received bytes
             while (old_pos != pos)
             {

@@ -23,10 +23,11 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
-#include "usart.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "mk_app.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,6 +70,13 @@ const osThreadAttr_t led_blink_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for mavlinkTask */
+osThreadId_t mavlinkTaskHandle;
+const osThreadAttr_t mavlinkTask_attributes = {
+  .name = "mavlinkTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -78,6 +86,7 @@ const osThreadAttr_t led_blink_attributes = {
 void StartDefaultTask(void *argument);
 void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
+void StartMavlinkTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -88,7 +97,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-
+  MAVLink_AppInit();
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -116,6 +125,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of led_blink */
   led_blinkHandle = osThreadNew(led_blink1, NULL, &led_blink_attributes);
+
+  /* creation of mavlinkTask */
+  mavlinkTaskHandle = osThreadNew(StartMavlinkTask, NULL, &mavlinkTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -187,6 +199,21 @@ void led_blink1(void *argument)
     HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
   }
   /* USER CODE END led_blink1 */
+}
+
+/* USER CODE BEGIN Header_StartMavlinkTask */
+/**
+* @brief Function implementing the mavlinkTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartMavlinkTask */
+void StartMavlinkTask(void *argument)
+{
+  /* USER CODE BEGIN StartMavlinkTask */
+  /* Infinite loop */
+  MAVLink_Task();
+  /* USER CODE END StartMavlinkTask */
 }
 
 /* Private application code --------------------------------------------------*/

@@ -1,6 +1,6 @@
 
-#ifndef MAVLINK_APP_H
-#define MAVLINK_APP_H
+#ifndef MK_APP_H
+#define MK_APP_H
 
 #include <stdint.h>
 #include <stdbool.h>
