@@ -247,45 +247,29 @@ void BLUETOOTH(void *argument)
 
         if (GPS_RawGetSnapshot(&gps))
         {
-            length = snprintf(
-                buffer, sizeof(buffer),
-                "GPS RX=%lu START=%lu LASTERR=%lu NMEA=%lu UBXmark=%lu\r\n",
-                (unsigned long)gps.rx_bytes,
-                (unsigned long)gps.starts,
-                (unsigned long)gps.last_uart_error,
-                (unsigned long)gps.nmea_lines,
-                (unsigned long)gps.ubx_markers
-            );
+            uint32_t now = (uint32_t)(xTaskGetTickCount()
+                                      * portTICK_PERIOD_MS);
+            uint32_t age = now - gps.last_gga_ms;
+
+            if (gps.gga_count == 0U)
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS WAIT GGA RX=%lu NMEA=%lu BAD=%lu ERR=%lu\r\n",
+                    (unsigned long)gps.rx_bytes,
+                    (unsigned long)gps.nmea_lines,
+                    (unsigned long)gps.gga_errors,
+                    (unsigned long)gps.last_uart_error);
+            else if (age >= 3000U)
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS STALE age=%lu ms RX=%lu BAD=%lu ERR=%lu\r\n",
+                    (unsigned long)age, (unsigned long)gps.rx_bytes,
+                    (unsigned long)gps.gga_errors,
+                    (unsigned long)gps.last_uart_error);
+            else
+                length = GPS_NmeaFormatFix(buffer, sizeof(buffer), &gps.fix);
+
             if (length > 0 && (size_t)length < sizeof(buffer))
                 HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
                                   (uint16_t)length, 100);
-
-            // Hex output remains readable even if the GPS is sending UBX.
-            memcpy(buffer, "GPS HEX:", 8);
-            size_t used = 8;
-            static const char hex[] = "0123456789ABCDEF";
-            for (uint16_t i = 0; i < gps.sample_size; ++i)
-            {
-                buffer[used++] = ' ';
-                buffer[used++] = hex[gps.sample[i] >> 4];
-                buffer[used++] = hex[gps.sample[i] & 0x0FU];
-            }
-            buffer[used++] = '\r';
-            buffer[used++] = '\n';
-            HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
-                              (uint16_t)used, 100);
-
-            if (gps.nmea_lines > 0U)
-            {
-                uint32_t now = (uint32_t)(xTaskGetTickCount()
-                                          * portTICK_PERIOD_MS);
-                length = snprintf(buffer, sizeof(buffer),
-                    "GPS RAW age=%lu ms: %s\r\n",
-                    (unsigned long)(now - gps.last_line_ms), gps.line);
-                if (length > 0 && (size_t)length < sizeof(buffer))
-                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
-                                      (uint16_t)length, 100);
-            }
         }
 
         osDelay(1000);

@@ -98,8 +98,7 @@ void GPS_RawTask(void)
                     gps_data.ubx_markers++;
                 previous_byte = byte;
 
-                // Collect bounded, printable $... lines for raw NMEA inspection.
-                // These lines are not yet checksum-validated or decoded.
+                // Keep raw text, then checksum-validate and decode GGA fixes.
                 if (byte == '$')
                 {
                     collecting_line = true;
@@ -113,6 +112,14 @@ void GPS_RawTask(void)
                     gps_data.nmea_lines++;
                     gps_data.last_line_ms = (uint32_t)(
                         xTaskGetTickCount() * portTICK_PERIOD_MS);
+                    GPS_NmeaResult_t result = GPS_NmeaParseGga(line, &gps_data.fix);
+                    if (result == GPS_NMEA_GGA)
+                    {
+                        gps_data.gga_count++;
+                        gps_data.last_gga_ms = gps_data.last_line_ms;
+                    }
+                    else if (result != GPS_NMEA_IGNORED)
+                        gps_data.gga_errors++;
                     collecting_line = false;
                 }
                 else if (collecting_line && byte != '\r')
