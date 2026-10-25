@@ -62,7 +62,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t uart_bluetoothHandle;
 const osThreadAttr_t uart_bluetooth_attributes = {
   .name = "uart_bluetooth",
-  .stack_size = 2048,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for led_blink */
