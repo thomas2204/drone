@@ -164,8 +164,7 @@ void MAVLink_Task(void)
         Error_Handler();
     }
 
-    // We poll the circular DMA pointer,
-    // so don't need half/full interrupts.
+    // Poll the circular DMA pointer; disable half-transfer interrupts.
     __HAL_DMA_DISABLE_IT(
         MAV_UART.hdmarx,
         DMA_IT_HT
@@ -175,6 +174,35 @@ void MAVLink_Task(void)
 
     for (;;)
     {
+        // HAL stops DMA reception after UART framing/overrun errors.
+        // Recover here in task context once HAL marks reception ready.
+        if (MAV_UART.RxState == HAL_UART_STATE_READY)
+        {
+            // AbortReceive also clears error flags and flushes pending RX data.
+            if (HAL_UART_AbortReceive(&MAV_UART) != HAL_OK)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+
+            old_pos = 0;
+            mavlink_reset_channel_status(MAVLINK_COMM_0);
+
+            if (HAL_UART_Receive_DMA(
+                    &MAV_UART,
+                    dma_rx,
+                    MAV_RX_DMA_SIZE) != HAL_OK)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+
+            __HAL_DMA_DISABLE_IT(MAV_UART.hdmarx, DMA_IT_HT);
+
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
         // DMA remaining transfer counter
         uint16_t remaining =
             __HAL_DMA_GET_COUNTER(

@@ -169,35 +169,66 @@ void StartDefaultTask(void *argument)
 void BLUETOOTH(void *argument)
 {
   /* USER CODE BEGIN BLUETOOTH */
-  /* Infinite loop */
-  
     char buffer[96];
     FC_Telemetry_t fc = {0};
 
     for (;;)
     {
+        int length = 0;
+
         if (MAVLink_GetTelemetry(&fc))
         {
-            int length = snprintf(
-                buffer,
-                sizeof(buffer),
-                "RX=%lu HB=%lu ATT=%lu LINK=%u\r\n",
-                (unsigned long)MAVLink_GetRxByteCount(),
-                (unsigned long)fc.heartbeat_count,
-                (unsigned long)fc.attitude_count,
-                (unsigned int)fc.connected
-            );
+            uint32_t now = (uint32_t)(xTaskGetTickCount()
+                                      * portTICK_PERIOD_MS);
+            uint32_t attitude_age = now - fc.last_attitude_ms;
+            const char *arm = fc.connected
+                ? (fc.armed ? "ARMED" : "DISARMED") : "UNKNOWN";
 
-            if (length > 0 &&
-                (size_t)length < sizeof(buffer))
+            if (fc.attitude_count == 0U)
             {
-                HAL_UART_Transmit(
-                    &huart7,
-                    (uint8_t *)buffer,
-                    (uint16_t)length,
-                    100
+                length = snprintf(
+                    buffer, sizeof(buffer),
+                    "Arm=%s NO ATTITUDE RX=%lu HB=%lu ATT=0 ERR=%lu\r\n",
+                    arm,
+                    (unsigned long)MAVLink_GetRxByteCount(),
+                    (unsigned long)fc.heartbeat_count,
+                    (unsigned long)huart1.ErrorCode
                 );
             }
+            else if (attitude_age >= 1000U)
+            {
+                length = snprintf(
+                    buffer, sizeof(buffer),
+                    "Arm=%s ATTITUDE STALE age=%lu ms HB=%lu ATT=%lu\r\n",
+                    arm, (unsigned long)attitude_age,
+                    (unsigned long)fc.heartbeat_count,
+                    (unsigned long)fc.attitude_count
+                );
+            }
+            else
+            {
+                // Whole degrees; integer formatting avoids printf float support.
+                long yaw_deg = (long)(fc.yaw * 57.2957795f);
+                long roll_deg = (long)(fc.roll * 57.2957795f);
+
+                length = snprintf(
+                    buffer, sizeof(buffer),
+                    "Yaw=%ld deg Roll=%ld deg Arm=%s\r\n",
+                    yaw_deg, roll_deg,
+                    arm
+                );
+            }
+        }
+        else
+        {
+            length = snprintf(buffer, sizeof(buffer),
+                              "Telemetry read failed\r\n");
+        }
+
+        if (length > 0 && (size_t)length < sizeof(buffer))
+        {
+            HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                              (uint16_t)length, 100);
         }
 
         osDelay(1000);
