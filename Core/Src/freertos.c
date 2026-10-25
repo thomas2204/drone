@@ -28,6 +28,8 @@
 /* USER CODE BEGIN Includes */
 #include "mk_app.h"
 #include "usart.h"
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -60,7 +62,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t uart_bluetoothHandle;
 const osThreadAttr_t uart_bluetooth_attributes = {
   .name = "uart_bluetooth",
-  .stack_size = 128 * 4,
+  .stack_size = 2048,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for led_blink */
@@ -168,14 +170,35 @@ void BLUETOOTH(void *argument)
 {
   /* USER CODE BEGIN BLUETOOTH */
   /* Infinite loop */
-  const char msg[] = "Hello from FreeRTOS!\r\n";
+  
+    char buffer[96];
+    FC_Telemetry_t fc = {0};
 
     for (;;)
     {
-        HAL_UART_Transmit(&huart7,
-                          (uint8_t *)msg,
-                          sizeof(msg) - 1,
-                          1000);
+        if (MAVLink_GetTelemetry(&fc))
+        {
+            int length = snprintf(
+                buffer,
+                sizeof(buffer),
+                "RX=%lu HB=%lu ATT=%lu LINK=%u\r\n",
+                (unsigned long)MAVLink_GetRxByteCount(),
+                (unsigned long)fc.heartbeat_count,
+                (unsigned long)fc.attitude_count,
+                (unsigned int)fc.connected
+            );
+
+            if (length > 0 &&
+                (size_t)length < sizeof(buffer))
+            {
+                HAL_UART_Transmit(
+                    &huart7,
+                    (uint8_t *)buffer,
+                    (uint16_t)length,
+                    100
+                );
+            }
+        }
 
         osDelay(1000);
     }

@@ -35,18 +35,18 @@
 
 
 static uint8_t dma_rx[MAV_RX_DMA_SIZE]
-    __attribute__((section(".dma_buffer"), aligned(32)));
+    __attribute__((section(".dma_buffer"), aligned(32))); //store raw mavelink readings
 
 static uint8_t dma_tx[MAV_TX_DMA_SIZE]
-    __attribute__((section(".dma_buffer"), aligned(32)));
-static uint16_t old_pos = 0;
+    __attribute__((section(".dma_buffer"), aligned(32))); //reserved for tx
+static uint16_t old_pos = 0;  //Tracks the next buffer position that your task needs to read.
 
 // =====================================
 // Shared data
 // =====================================
 
-static FC_Telemetry_t fc_data;
-static SemaphoreHandle_t fc_mutex = NULL;
+static FC_Telemetry_t fc_data;   //edcoded data
+static SemaphoreHandle_t fc_mutex = NULL;  //mutex: a lock protecting fc_data while one task updates it and another copies it.
 
 static volatile uint32_t rx_byte_count = 0;
 
@@ -56,9 +56,9 @@ static volatile uint32_t rx_byte_count = 0;
 
 void MAVLink_AppInit(void)
 {
-    memset(&fc_data, 0, sizeof(fc_data));
+    memset(&fc_data, 0, sizeof(fc_data));  //Clears the telemetry structure
 
-    fc_mutex = xSemaphoreCreateMutex();
+    fc_mutex = xSemaphoreCreateMutex();  //Creates the lock and checks that creation succeeded.
 
     configASSERT(fc_mutex != NULL);
 }
@@ -82,7 +82,7 @@ static void ProcessMessage(
         (uint32_t)(xTaskGetTickCount()
                    * portTICK_PERIOD_MS);
 
-    switch (msg->msgid)
+    switch (msg->msgid)  //hooses what to do based on message type.
     {
         case MAVLINK_MSG_ID_HEARTBEAT:
         {
@@ -134,7 +134,7 @@ static void ProcessMessage(
             break;
     }
 
-    xSemaphoreGive(fc_mutex);
+    xSemaphoreGive(fc_mutex); //unlock
 }
 
 // =====================================
@@ -254,5 +254,5 @@ bool MAVLink_GetTelemetry(
 
 uint32_t MAVLink_GetRxByteCount(void)
 {
-    return rx_byte_count;
+    return rx_byte_count;  //dignostic count for byte recived 
 }
