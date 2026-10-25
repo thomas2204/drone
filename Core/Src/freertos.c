@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "mk_app.h"
+#include "gps_raw.h"
 #include "usart.h"
 #include <stdio.h>
 #include <string.h>
@@ -79,6 +80,13 @@ const osThreadAttr_t mavlinkTask_attributes = {
   .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
+/* Definitions for gpsTask */
+osThreadId_t gpsTaskHandle;
+const osThreadAttr_t gpsTask_attributes = {
+  .name = "gpsTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -89,6 +97,7 @@ void StartDefaultTask(void *argument);
 void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
 void StartMavlinkTask(void *argument);
+void StartGpsTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -100,6 +109,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
   MAVLink_AppInit();
+  GPS_RawInit();
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -130,6 +140,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of mavlinkTask */
   mavlinkTaskHandle = osThreadNew(StartMavlinkTask, NULL, &mavlinkTask_attributes);
+
+  /* creation of gpsTask */
+  gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -169,8 +182,9 @@ void StartDefaultTask(void *argument)
 void BLUETOOTH(void *argument)
 {
   /* USER CODE BEGIN BLUETOOTH */
-    char buffer[96];
+    char buffer[192];
     FC_Telemetry_t fc = {0};
+    GPS_RawSnapshot_t gps = {0};
 
     for (;;)
     {
@@ -231,6 +245,49 @@ void BLUETOOTH(void *argument)
                               (uint16_t)length, 100);
         }
 
+        if (GPS_RawGetSnapshot(&gps))
+        {
+            length = snprintf(
+                buffer, sizeof(buffer),
+                "GPS RX=%lu START=%lu LASTERR=%lu NMEA=%lu UBXmark=%lu\r\n",
+                (unsigned long)gps.rx_bytes,
+                (unsigned long)gps.starts,
+                (unsigned long)gps.last_uart_error,
+                (unsigned long)gps.nmea_lines,
+                (unsigned long)gps.ubx_markers
+            );
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                  (uint16_t)length, 100);
+
+            // Hex output remains readable even if the GPS is sending UBX.
+            memcpy(buffer, "GPS HEX:", 8);
+            size_t used = 8;
+            static const char hex[] = "0123456789ABCDEF";
+            for (uint16_t i = 0; i < gps.sample_size; ++i)
+            {
+                buffer[used++] = ' ';
+                buffer[used++] = hex[gps.sample[i] >> 4];
+                buffer[used++] = hex[gps.sample[i] & 0x0FU];
+            }
+            buffer[used++] = '\r';
+            buffer[used++] = '\n';
+            HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                              (uint16_t)used, 100);
+
+            if (gps.nmea_lines > 0U)
+            {
+                uint32_t now = (uint32_t)(xTaskGetTickCount()
+                                          * portTICK_PERIOD_MS);
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS RAW age=%lu ms: %s\r\n",
+                    (unsigned long)(now - gps.last_line_ms), gps.line);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                      (uint16_t)length, 100);
+            }
+        }
+
         osDelay(1000);
     }
   /* USER CODE END BLUETOOTH */
@@ -268,6 +325,22 @@ void StartMavlinkTask(void *argument)
   /* Infinite loop */
   MAVLink_Task();
   /* USER CODE END StartMavlinkTask */
+}
+
+/* USER CODE BEGIN Header_StartGpsTask */
+/**
+* @brief Function implementing the gpsTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartGpsTask */
+void StartGpsTask(void *argument)
+{
+  /* USER CODE BEGIN StartGpsTask */
+  // Keep reception responsive while the lower-priority Bluetooth task prints.
+  osThreadSetPriority(osThreadGetId(), osPriorityNormal);
+  GPS_RawTask();
+  /* USER CODE END StartGpsTask */
 }
 
 /* Private application code --------------------------------------------------*/
