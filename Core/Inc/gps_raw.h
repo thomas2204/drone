@@ -19,10 +19,23 @@ typedef struct
     uint16_t sample_size;
     uint8_t sample[GPS_RAW_SAMPLE_SIZE];
     char line[GPS_RAW_LINE_SIZE];
+    // Latest raw sentences for inspecting fields before GPS_INPUT forwarding.
+    char gsa_line[GPS_RAW_LINE_SIZE];
+    char rmc_line[GPS_RAW_LINE_SIZE];
+    uint32_t gsa_count;
+    uint32_t rmc_count;
     GPS_NmeaFix_t fix;
     uint32_t gga_count;
     uint32_t last_gga_ms;
     uint32_t gga_errors;
+    GPS_NmeaGsa_t gsa;
+    GPS_NmeaRmc_t rmc;
+    uint32_t gsa_decoded_count;
+    uint32_t rmc_decoded_count;
+    uint32_t last_gsa_ms;
+    uint32_t last_rmc_ms;
+    uint32_t gsa_errors;
+    uint32_t rmc_errors;
 } GPS_RawSnapshot_t;
 
 void GPS_RawInit(void);

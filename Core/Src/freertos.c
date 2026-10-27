@@ -185,13 +185,17 @@ void BLUETOOTH(void *argument)
     char buffer[192];
     FC_Telemetry_t fc = {0};
     GPS_RawSnapshot_t gps = {0};
+    uint32_t printed_gsa_count = 0;
+    uint32_t printed_rmc_count = 0;
 
     for (;;)
     {
         int length = 0;
+        bool telemetry_available = false;
 
         if (MAVLink_GetTelemetry(&fc))
         {
+            telemetry_available = true;
             uint32_t now = (uint32_t)(xTaskGetTickCount()
                                       * portTICK_PERIOD_MS);
             uint32_t attitude_age = now - fc.last_attitude_ms;
@@ -245,6 +249,16 @@ void BLUETOOTH(void *argument)
                               (uint16_t)length, 100);
         }
 
+        if (telemetry_available)
+        {
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS TX=%lu ERR=%lu LastFix=%u\r\n",
+                (unsigned long)fc.gps_tx_count, (unsigned long)fc.gps_tx_errors,
+                (unsigned int)fc.gps_tx_fix_type);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+        }
+
         if (GPS_RawGetSnapshot(&gps))
         {
             uint32_t now = (uint32_t)(xTaskGetTickCount()
@@ -270,6 +284,55 @@ void BLUETOOTH(void *argument)
             if (length > 0 && (size_t)length < sizeof(buffer))
                 HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
                                   (uint16_t)length, 100);
+
+            if (gps.gsa_count != printed_gsa_count)
+            {
+                length = snprintf(buffer, sizeof(buffer),
+                                  "GPS RAW GSA: %s\r\n", gps.gsa_line);
+                if (length > 0 && (size_t)length < sizeof(buffer) &&
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                      (uint16_t)length, 100) == HAL_OK)
+                    printed_gsa_count = gps.gsa_count;
+            }
+            if (gps.rmc_count != printed_rmc_count)
+            {
+                length = snprintf(buffer, sizeof(buffer),
+                                  "GPS RAW RMC: %s\r\n", gps.rmc_line);
+                if (length > 0 && (size_t)length < sizeof(buffer) &&
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                      (uint16_t)length, 100) == HAL_OK)
+                    printed_rmc_count = gps.rmc_count;
+            }
+            if (gps.rmc_decoded_count != 0U)
+            {
+                char speed[24] = "N/A", course[24] = "N/A";
+                bool rmc_fresh = (uint32_t)(now - gps.last_rmc_ms) < 3000U;
+                bool gsa_fresh = gps.gsa_decoded_count != 0U &&
+                    (uint32_t)(now - gps.last_gsa_ms) < 3000U;
+                if (rmc_fresh && gps.rmc.speed_valid)
+                    snprintf(speed, sizeof(speed), "%lu.%03lu",
+                        (unsigned long)(gps.rmc.speed_mm_s / 1000U),
+                        (unsigned long)(gps.rmc.speed_mm_s % 1000U));
+                if (rmc_fresh && gps.rmc.course_valid)
+                    snprintf(course, sizeof(course), "%lu.%02lu",
+                        (unsigned long)(gps.rmc.course_cdeg / 100U),
+                        (unsigned long)(gps.rmc.course_cdeg % 100U));
+                if (rmc_fresh && gps.rmc.time_valid)
+                    length = snprintf(buffer, sizeof(buffer),
+                        "GPS NAV FixDim=%u UTC=%04u-%02u-%02u %02lu:%02lu:%02lu Speed=%s m/s Course=%s deg\r\n",
+                        gsa_fresh ? (unsigned int)gps.gsa.fix_dimension : 0U,
+                        (unsigned int)gps.rmc.year, (unsigned int)gps.rmc.month,
+                        (unsigned int)gps.rmc.day,
+                        (unsigned long)(gps.rmc.utc_ms / 3600000U),
+                        (unsigned long)(gps.rmc.utc_ms / 60000U % 60U),
+                        (unsigned long)(gps.rmc.utc_ms / 1000U % 60U), speed, course);
+                else
+                    length = snprintf(buffer, sizeof(buffer),
+                        "GPS NAV time unavailable/stale FixDim=%u Speed=%s m/s Course=%s deg\r\n",
+                        gsa_fresh ? (unsigned int)gps.gsa.fix_dimension : 0U, speed, course);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            }
         }
 
         osDelay(1000);

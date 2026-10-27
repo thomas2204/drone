@@ -10,6 +10,7 @@
 #include "semphr.h"
 
 #include "ardupilotmega/mavlink.h"
+#include "gps_input.h"
 
 #include <string.h>
 
@@ -19,7 +20,6 @@
 
 #define MAV_UART           huart1
 #define MAV_RX_DMA_SIZE 1024
-#define MAV_TX_DMA_SIZE 512
 
 
 // =====================================
@@ -37,8 +37,6 @@
 static uint8_t dma_rx[MAV_RX_DMA_SIZE]
     __attribute__((section(".dma_buffer"), aligned(32))); //store raw mavelink readings
 
-static uint8_t dma_tx[MAV_TX_DMA_SIZE]
-    __attribute__((section(".dma_buffer"), aligned(32))); //reserved for tx
 static uint16_t old_pos = 0;  //Tracks the next buffer position that your task needs to read.
 
 // =====================================
@@ -49,6 +47,7 @@ static FC_Telemetry_t fc_data;   //edcoded data
 static SemaphoreHandle_t fc_mutex = NULL;  //mutex: a lock protecting fc_data while one task updates it and another copies it.
 
 static volatile uint32_t rx_byte_count = 0;
+static uint8_t fc_system_id = 1;
 
 // =====================================
 // Initialization
@@ -96,6 +95,7 @@ static void ProcessMessage(
                 break;
 
             fc_data.heartbeat_count++;
+            fc_system_id = msg->sysid;
 
             fc_data.last_heartbeat_ms = now;
 
@@ -129,7 +129,6 @@ static void ProcessMessage(
 
             break;
         }
-
         default:
             break;
     }
@@ -140,6 +139,43 @@ static void ProcessMessage(
 // =====================================
 // Main MAVLink Task
 // =====================================
+
+// Called only by MAVLink_Task: USART1 has one transmitter and MAVLink sequence owner.
+static void ForwardGps(uint32_t now)
+{
+    static uint32_t last_poll_ms;
+    static uint32_t last_tx_ms;
+    static uint32_t sent_rmc_count;
+    static GPS_RawSnapshot_t gps;
+    if ((uint32_t)(now - last_poll_ms) < 20U ||
+        (uint32_t)(now - last_tx_ms) < 200U) return;
+    last_poll_ms = now;
+    if (!GPS_RawGetSnapshot(&gps) || gps.rmc_decoded_count == sent_rmc_count)
+        return;
+    mavlink_gps_input_t input;
+    if (!GPS_BuildInput(&gps, now, &input)) return;
+    mavlink_message_t message;
+    uint8_t packet[MAVLINK_MAX_PACKET_LEN];
+    mavlink_get_channel_status(MAVLINK_COMM_0)->flags &= ~MAVLINK_STATUS_FLAG_OUT_MAVLINK1;
+    mavlink_msg_gps_input_encode_chan(fc_system_id, MAV_COMP_ID_ONBOARD_COMPUTER,
+                                    MAVLINK_COMM_0, &message, &input);
+    uint16_t length = mavlink_msg_to_send_buffer(packet, &message);
+    // 77 bytes take under 2ms at 460800 baud. RX DMA continues during polling TX.
+    HAL_StatusTypeDef result = HAL_UART_Transmit(&MAV_UART, packet, length, 5);
+    last_tx_ms = now;
+    if (result == HAL_OK) sent_rmc_count = gps.rmc_decoded_count;
+    if (xSemaphoreTake(fc_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (result == HAL_OK)
+        {
+            fc_data.gps_tx_count++;
+            fc_data.gps_tx_fix_type = input.fix_type;
+        }
+        else
+            fc_data.gps_tx_errors++;
+        xSemaphoreGive(fc_mutex);
+    }
+}
 
 void MAVLink_Task(void)
 {
@@ -243,6 +279,8 @@ void MAVLink_Task(void)
                 }
             }
         }
+
+        ForwardGps((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
 
         // Poll once per millisecond
         vTaskDelay(pdMS_TO_TICKS(1));

@@ -1,0 +1,34 @@
+{
+  "source_commit": "9f648ccabcf25a421192dc5b57491ce981506872",
+  "before_hwdef_sha256": "16231b29c1f6c6975f47ded1402c3caecf899f4d56c7eb09c2e1f8d4d90339c2",
+  "preserved_source_hashes": {
+    "AP_InertialSensor_Invensense.cpp": "25b9eddcde7aa430a2a5f2233f5b9e3eedb6ff0c161be7de312c98a4bbf0f8f8",
+    "AP_InertialSensor_Invensensev3.cpp": "99d10f6421c263e1da2c5167b640b1edd9db666be9e5c375503da66a533a21de"
+  },
+  "board_id": 1050,
+  "git_identity": "9f648cca",
+  "image_size": 851016,
+  "free_application_flash_bytes": 99256,
+  "firmware_sha256": "3396d64681721d6295c844fbdb9de967db105dda928d3d846ff4a186cb78eaf1",
+  "parameter_storage_pages": [
+    1,
+    2
+  ],
+  "parameter_storage_address_range": [
+    "0x08008000",
+    "0x08017FFF"
+  ],
+  "application_start": "0x08018000",
+  "verified": [
+    "target build passed",
+    "BMP280 probe and update linked",
+    "probe is bus 0 address 0x77",
+    "APJ image matches built binary",
+    "board ID and git identity match previous build",
+    "linker script identical",
+    "parameter storage size and pages unchanged",
+    "existing custom IMU source modifications unchanged",
+    "hardware definition differs only by BMP280 addition"
+  ],
+  "hardware_tested": false
+}

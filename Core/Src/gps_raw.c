@@ -112,6 +112,34 @@ void GPS_RawTask(void)
                     gps_data.nmea_lines++;
                     gps_data.last_line_ms = (uint32_t)(
                         xTaskGetTickCount() * portTICK_PERIOD_MS);
+                    // Keep diagnostic copies independently of decoder acceptance.
+                    // Match any talker prefix (GN, GP, GA, etc.).
+                    if (line_size >= 7U && memcmp(line + 3, "GSA,", 4) == 0)
+                    {
+                        memcpy(gps_data.gsa_line, line, line_size + 1U);
+                        gps_data.gsa_count++;
+                        GPS_NmeaResult_t result = GPS_NmeaParseGsa(line, &gps_data.gsa);
+                        if (result == GPS_NMEA_GSA)
+                        {
+                            gps_data.gsa_decoded_count++;
+                            gps_data.last_gsa_ms = gps_data.last_line_ms;
+                        }
+                        else
+                            gps_data.gsa_errors++;
+                    }
+                    else if (line_size >= 7U && memcmp(line + 3, "RMC,", 4) == 0)
+                    {
+                        memcpy(gps_data.rmc_line, line, line_size + 1U);
+                        gps_data.rmc_count++;
+                        GPS_NmeaResult_t result = GPS_NmeaParseRmc(line, &gps_data.rmc);
+                        if (result == GPS_NMEA_RMC)
+                        {
+                            gps_data.rmc_decoded_count++;
+                            gps_data.last_rmc_ms = gps_data.last_line_ms;
+                        }
+                        else
+                            gps_data.rmc_errors++;
+                    }
                     GPS_NmeaResult_t result = GPS_NmeaParseGga(line, &gps_data.fix);
                     if (result == GPS_NMEA_GGA)
                     {

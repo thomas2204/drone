@@ -212,6 +212,10 @@ define HAL_I2C_INTERNAL_MASK 0
 # during custom-board bring-up.
 # -------------------------------------------------
 
+# BMP280 on physical I2C1 (logical bus 0), SDO high: 0x77.
+BARO BMP280 I2C:0:0x77
+define AP_BARO_BMP280_ENABLED 1
+
 define HAL_BARO_ALLOW_INIT_NO_BARO 1
 
 # Betaflight/X motor layout
@@ -220,3 +224,6 @@ define HAL_FRAME_TYPE_DEFAULT 12
 
 # Reduce firmware size for F745
 include ../include/minimize_fpv_osd.inc
+
+# Accept GPS_INPUT from the STM32 companion on the existing MAVLink link.
+define AP_GPS_MAV_ENABLED 1

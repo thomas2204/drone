@@ -1,0 +1,27 @@
+{
+  "source_commit": "9f648ccabcf25a421192dc5b57491ce981506872",
+  "board_id": 1050,
+  "git_identity": "9f648cca",
+  "image_size": 851792,
+  "free_application_flash_bytes": 98480,
+  "firmware_sha256": "7e2cdc5ad2b3c322ffe45deb8216d92760810279d44c66577057daf6210a8de2",
+  "preserved_source_hashes": {
+    "AP_InertialSensor_Invensense.cpp": "25b9eddcde7aa430a2a5f2233f5b9e3eedb6ff0c161be7de312c98a4bbf0f8f8",
+    "AP_InertialSensor_Invensensev3.cpp": "99d10f6421c263e1da2c5167b640b1edd9db666be9e5c375503da66a533a21de"
+  },
+  "parameter_storage_address_range": [
+    "0x08008000",
+    "0x08017FFF"
+  ],
+  "application_start": "0x08018000",
+  "verified": [
+    "target build passed",
+    "AP_GPS_MAV handle_msg/read linked",
+    "BMP280 probe linked",
+    "APJ payload equals binary",
+    "linker identical to previous firmware",
+    "parameter storage unchanged",
+    "custom IMU patches unchanged"
+  ],
+  "hardware_tested": false
+}
