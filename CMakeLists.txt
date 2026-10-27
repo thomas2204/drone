@@ -32,10 +32,25 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 enable_language(C ASM)
 
 # Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME}
-    Core/Inc/mk_app.h
-    Core/Src/mk_app.c)
+# Create firmware executable
 
+add_executable(${CMAKE_PROJECT_NAME})
+
+# ==========================================
+# Custom MAVLink application
+# ==========================================
+
+# Compile MAVLink application
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_SOURCE_DIR}/Core/Src/mk_app.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/gps_raw.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/gps_nmea.c
+)
+
+# Include MAVLink C library
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_SOURCE_DIR}/MAVLink
+)
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 

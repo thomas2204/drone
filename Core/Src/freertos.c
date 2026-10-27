@@ -23,10 +23,14 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
-#include "usart.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "mk_app.h"
+#include "gps_raw.h"
+#include "usart.h"
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,7 +63,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t uart_bluetoothHandle;
 const osThreadAttr_t uart_bluetooth_attributes = {
   .name = "uart_bluetooth",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for led_blink */
@@ -68,6 +72,20 @@ const osThreadAttr_t led_blink_attributes = {
   .name = "led_blink",
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for mavlinkTask */
+osThreadId_t mavlinkTaskHandle;
+const osThreadAttr_t mavlinkTask_attributes = {
+  .name = "mavlinkTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for gpsTask */
+osThreadId_t gpsTaskHandle;
+const osThreadAttr_t gpsTask_attributes = {
+  .name = "gpsTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,6 +96,8 @@ const osThreadAttr_t led_blink_attributes = {
 void StartDefaultTask(void *argument);
 void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
+void StartMavlinkTask(void *argument);
+void StartGpsTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -88,7 +108,8 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-
+  MAVLink_AppInit();
+  GPS_RawInit();
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -116,6 +137,12 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of led_blink */
   led_blinkHandle = osThreadNew(led_blink1, NULL, &led_blink_attributes);
+
+  /* creation of mavlinkTask */
+  mavlinkTaskHandle = osThreadNew(StartMavlinkTask, NULL, &mavlinkTask_attributes);
+
+  /* creation of gpsTask */
+  gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -155,15 +182,95 @@ void StartDefaultTask(void *argument)
 void BLUETOOTH(void *argument)
 {
   /* USER CODE BEGIN BLUETOOTH */
-  /* Infinite loop */
-  const char msg[] = "Hello from FreeRTOS!\r\n";
+    char buffer[192];
+    FC_Telemetry_t fc = {0};
+    GPS_RawSnapshot_t gps = {0};
 
     for (;;)
     {
-        HAL_UART_Transmit(&huart7,
-                          (uint8_t *)msg,
-                          sizeof(msg) - 1,
-                          1000);
+        int length = 0;
+
+        if (MAVLink_GetTelemetry(&fc))
+        {
+            uint32_t now = (uint32_t)(xTaskGetTickCount()
+                                      * portTICK_PERIOD_MS);
+            uint32_t attitude_age = now - fc.last_attitude_ms;
+            const char *arm = fc.connected
+                ? (fc.armed ? "ARMED" : "DISARMED") : "UNKNOWN";
+
+            if (fc.attitude_count == 0U)
+            {
+                length = snprintf(
+                    buffer, sizeof(buffer),
+                    "Arm=%s NO ATTITUDE RX=%lu HB=%lu ATT=0 ERR=%lu\r\n",
+                    arm,
+                    (unsigned long)MAVLink_GetRxByteCount(),
+                    (unsigned long)fc.heartbeat_count,
+                    (unsigned long)huart1.ErrorCode
+                );
+            }
+            else if (attitude_age >= 1000U)
+            {
+                length = snprintf(
+                    buffer, sizeof(buffer),
+                    "Arm=%s ATTITUDE STALE age=%lu ms HB=%lu ATT=%lu\r\n",
+                    arm, (unsigned long)attitude_age,
+                    (unsigned long)fc.heartbeat_count,
+                    (unsigned long)fc.attitude_count
+                );
+            }
+            else
+            {
+                // Whole degrees; integer formatting avoids printf float support.
+                long yaw_deg = (long)(fc.yaw * 57.2957795f);
+                long roll_deg = (long)(fc.roll * 57.2957795f);
+
+                length = snprintf(
+                    buffer, sizeof(buffer),
+                    "Yaw=%ld deg Roll=%ld deg Arm=%s\r\n",
+                    yaw_deg, roll_deg,
+                    arm
+                );
+            }
+        }
+        else
+        {
+            length = snprintf(buffer, sizeof(buffer),
+                              "Telemetry read failed\r\n");
+        }
+
+        if (length > 0 && (size_t)length < sizeof(buffer))
+        {
+            HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                              (uint16_t)length, 100);
+        }
+
+        if (GPS_RawGetSnapshot(&gps))
+        {
+            uint32_t now = (uint32_t)(xTaskGetTickCount()
+                                      * portTICK_PERIOD_MS);
+            uint32_t age = now - gps.last_gga_ms;
+
+            if (gps.gga_count == 0U)
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS WAIT GGA RX=%lu NMEA=%lu BAD=%lu ERR=%lu\r\n",
+                    (unsigned long)gps.rx_bytes,
+                    (unsigned long)gps.nmea_lines,
+                    (unsigned long)gps.gga_errors,
+                    (unsigned long)gps.last_uart_error);
+            else if (age >= 3000U)
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS STALE age=%lu ms RX=%lu BAD=%lu ERR=%lu\r\n",
+                    (unsigned long)age, (unsigned long)gps.rx_bytes,
+                    (unsigned long)gps.gga_errors,
+                    (unsigned long)gps.last_uart_error);
+            else
+                length = GPS_NmeaFormatFix(buffer, sizeof(buffer), &gps.fix);
+
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                  (uint16_t)length, 100);
+        }
 
         osDelay(1000);
     }
@@ -187,6 +294,37 @@ void led_blink1(void *argument)
     HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
   }
   /* USER CODE END led_blink1 */
+}
+
+/* USER CODE BEGIN Header_StartMavlinkTask */
+/**
+* @brief Function implementing the mavlinkTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartMavlinkTask */
+void StartMavlinkTask(void *argument)
+{
+  /* USER CODE BEGIN StartMavlinkTask */
+  /* Infinite loop */
+  MAVLink_Task();
+  /* USER CODE END StartMavlinkTask */
+}
+
+/* USER CODE BEGIN Header_StartGpsTask */
+/**
+* @brief Function implementing the gpsTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartGpsTask */
+void StartGpsTask(void *argument)
+{
+  /* USER CODE BEGIN StartGpsTask */
+  // Keep reception responsive while the lower-priority Bluetooth task prints.
+  osThreadSetPriority(osThreadGetId(), osPriorityNormal);
+  GPS_RawTask();
+  /* USER CODE END StartGpsTask */
 }
 
 /* Private application code --------------------------------------------------*/

@@ -18,7 +18,9 @@
 // =====================================
 
 #define MAV_UART           huart1
-#define MAV_RX_DMA_SIZE    1024U
+#define MAV_RX_DMA_SIZE 1024
+#define MAV_TX_DMA_SIZE 512
+
 
 // =====================================
 // DMA buffer
@@ -31,17 +33,20 @@
 // Make sure your linker places this buffer
 // in AXI SRAM or D2 SRAM.
 
-static uint8_t dma_rx[MAV_RX_DMA_SIZE]
-    __attribute__((aligned(32)));
 
-static uint16_t old_pos = 0;
+static uint8_t dma_rx[MAV_RX_DMA_SIZE]
+    __attribute__((section(".dma_buffer"), aligned(32))); //store raw mavelink readings
+
+static uint8_t dma_tx[MAV_TX_DMA_SIZE]
+    __attribute__((section(".dma_buffer"), aligned(32))); //reserved for tx
+static uint16_t old_pos = 0;  //Tracks the next buffer position that your task needs to read.
 
 // =====================================
 // Shared data
 // =====================================
 
-static FC_Telemetry_t fc_data;
-static SemaphoreHandle_t fc_mutex = NULL;
+static FC_Telemetry_t fc_data;   //edcoded data
+static SemaphoreHandle_t fc_mutex = NULL;  //mutex: a lock protecting fc_data while one task updates it and another copies it.
 
 static volatile uint32_t rx_byte_count = 0;
 
@@ -51,9 +56,9 @@ static volatile uint32_t rx_byte_count = 0;
 
 void MAVLink_AppInit(void)
 {
-    memset(&fc_data, 0, sizeof(fc_data));
+    memset(&fc_data, 0, sizeof(fc_data));  //Clears the telemetry structure
 
-    fc_mutex = xSemaphoreCreateMutex();
+    fc_mutex = xSemaphoreCreateMutex();  //Creates the lock and checks that creation succeeded.
 
     configASSERT(fc_mutex != NULL);
 }
@@ -77,7 +82,7 @@ static void ProcessMessage(
         (uint32_t)(xTaskGetTickCount()
                    * portTICK_PERIOD_MS);
 
-    switch (msg->msgid)
+    switch (msg->msgid)  //hooses what to do based on message type.
     {
         case MAVLINK_MSG_ID_HEARTBEAT:
         {
@@ -129,7 +134,7 @@ static void ProcessMessage(
             break;
     }
 
-    xSemaphoreGive(fc_mutex);
+    xSemaphoreGive(fc_mutex); //unlock
 }
 
 // =====================================
@@ -143,12 +148,13 @@ void MAVLink_Task(void)
 
     memset(&msg, 0, sizeof(msg));
     memset(&status, 0, sizeof(status));
-
+    /*
     // Clean cache state before starting DMA
     SCB_InvalidateDCache_by_Addr(
         (uint32_t *)dma_rx,
         MAV_RX_DMA_SIZE
     );
+    */
 
     if (HAL_UART_Receive_DMA(
         &MAV_UART,
@@ -158,17 +164,45 @@ void MAVLink_Task(void)
         Error_Handler();
     }
 
-    // We poll the circular DMA pointer,
-    // so don't need half/full interrupts.
+    // Poll the circular DMA pointer; disable half-transfer interrupts.
     __HAL_DMA_DISABLE_IT(
         MAV_UART.hdmarx,
-        DMA_IT_HT | DMA_IT_TC
+        DMA_IT_HT
     );
 
     old_pos = 0;
 
     for (;;)
     {
+        // HAL stops DMA reception after UART framing/overrun errors.
+        // Recover here in task context once HAL marks reception ready.
+        if (MAV_UART.RxState == HAL_UART_STATE_READY)
+        {
+            // AbortReceive also clears error flags and flushes pending RX data.
+            if (HAL_UART_AbortReceive(&MAV_UART) != HAL_OK)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+
+            old_pos = 0;
+            mavlink_reset_channel_status(MAVLINK_COMM_0);
+
+            if (HAL_UART_Receive_DMA(
+                    &MAV_UART,
+                    dma_rx,
+                    MAV_RX_DMA_SIZE) != HAL_OK)
+            {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                continue;
+            }
+
+            __HAL_DMA_DISABLE_IT(MAV_UART.hdmarx, DMA_IT_HT);
+
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
         // DMA remaining transfer counter
         uint16_t remaining =
             __HAL_DMA_GET_COUNTER(
@@ -180,12 +214,13 @@ void MAVLink_Task(void)
 
         if (pos != old_pos)
         {
+            /*
             // DMA may have updated cacheable SRAM
             SCB_InvalidateDCache_by_Addr(
                 (uint32_t *)dma_rx,
                 MAV_RX_DMA_SIZE
             );
-
+            */
             // Process all newly received bytes
             while (old_pos != pos)
             {
@@ -247,5 +282,5 @@ bool MAVLink_GetTelemetry(
 
 uint32_t MAVLink_GetRxByteCount(void)
 {
-    return rx_byte_count;
+    return rx_byte_count;  //dignostic count for byte recived 
 }
