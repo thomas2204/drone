@@ -46,6 +46,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_raw.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_nmea.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_input.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/gps_ubx.c
 )
 
 # Include MAVLink C library

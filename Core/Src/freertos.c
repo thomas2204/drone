@@ -184,9 +184,10 @@ void BLUETOOTH(void *argument)
   /* USER CODE BEGIN BLUETOOTH */
     char buffer[192];
     FC_Telemetry_t fc = {0};
-    GPS_RawSnapshot_t gps = {0};
+    static GPS_RawSnapshot_t gps;
     uint32_t printed_gsa_count = 0;
     uint32_t printed_rmc_count = 0;
+    uint32_t previous_pvt_count = 0, previous_tx_count = 0, previous_print_ms = 0;
 
     for (;;)
     {
@@ -263,6 +264,61 @@ void BLUETOOTH(void *argument)
         {
             uint32_t now = (uint32_t)(xTaskGetTickCount()
                                       * portTICK_PERIOD_MS);
+            static const char *const config_names[] = {"WAIT", "SENT", "ACK", "NAK", "TIMEOUT"};
+            const char *config = (unsigned)gps.config_state < 5U
+                ? config_names[gps.config_state] : "UNKNOWN";
+            if (gps.pvt_count != 0U)
+            {
+                uint32_t elapsed = now - previous_print_ms;
+                uint32_t rx_rate = 0, tx_rate = 0;
+                if (previous_print_ms != 0U && elapsed != 0U)
+                {
+                    rx_rate = (uint32_t)((uint64_t)(gps.pvt_count - previous_pvt_count) * 10000ULL / elapsed);
+                    if (telemetry_available)
+                        tx_rate = (uint32_t)((uint64_t)(fc.gps_tx_count - previous_tx_count) * 10000ULL / elapsed);
+                }
+                previous_print_ms = now;
+                previous_pvt_count = gps.pvt_count;
+                previous_tx_count = fc.gps_tx_count;
+                uint32_t pvt_age = now - gps.last_pvt_ms;
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS PVT=%lu DOP=%lu RX=%lu.%luHz TX=%lu.%luHz Step=%lums Age=%lums Bad=%lu Dup=%lu Gap=%lu CFG=%s\r\n",
+                    (unsigned long)gps.pvt_count, (unsigned long)gps.dop_count,
+                    (unsigned long)(rx_rate / 10U), (unsigned long)(rx_rate % 10U),
+                    (unsigned long)(tx_rate / 10U), (unsigned long)(tx_rate % 10U),
+                    (unsigned long)gps.pvt_step_ms, (unsigned long)pvt_age,
+                    (unsigned long)gps.ubx_errors, (unsigned long)gps.pvt_duplicates,
+                    (unsigned long)gps.pvt_gaps, config);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                if (pvt_age >= 500U)
+                    length = snprintf(buffer, sizeof(buffer), "GPS UBX STALE age=%lu ms\r\n", (unsigned long)pvt_age);
+                else
+                    length = GPS_UbxFormatPvt(buffer, sizeof(buffer), &gps.pvt);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                if (pvt_age < 500U && gps.pvt.fix_ok)
+                {
+                    length = snprintf(buffer, sizeof(buffer),
+                        "GPS VEL N=%ld E=%ld D=%ld mm/s hAcc=%lu vAcc=%lu mm sAcc=%lu mm/s\r\n",
+                        (long)gps.pvt.velocity_n_mm_s, (long)gps.pvt.velocity_e_mm_s,
+                        (long)gps.pvt.velocity_d_mm_s,
+                        (unsigned long)gps.pvt.horizontal_accuracy_mm,
+                        (unsigned long)gps.pvt.vertical_accuracy_mm,
+                        (unsigned long)gps.pvt.speed_accuracy_mm_s);
+                    if (length > 0 && (size_t)length < sizeof(buffer))
+                        HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                }
+                osDelay(1000);
+                continue;
+            }
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS CFG=%s Try=%lu ACK=%lu NAK=%lu TxErr=%lu UBXBad=%lu PVT=0 (NMEA fallback)\r\n",
+                config, (unsigned long)gps.config_attempts, (unsigned long)gps.config_acks,
+                (unsigned long)gps.config_naks, (unsigned long)gps.config_tx_errors,
+                (unsigned long)gps.ubx_errors);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
             uint32_t age = now - gps.last_gga_ms;
 
             if (gps.gga_count == 0U)

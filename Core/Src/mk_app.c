@@ -144,14 +144,14 @@ static void ProcessMessage(
 static void ForwardGps(uint32_t now)
 {
     static uint32_t last_poll_ms;
-    static uint32_t last_tx_ms;
     static uint32_t sent_rmc_count;
+    static uint32_t sent_pvt_count;
     static GPS_RawSnapshot_t gps;
-    if ((uint32_t)(now - last_poll_ms) < 20U ||
-        (uint32_t)(now - last_tx_ms) < 200U) return;
+    if ((uint32_t)(now - last_poll_ms) < 5U) return;
     last_poll_ms = now;
-    if (!GPS_RawGetSnapshot(&gps) || gps.rmc_decoded_count == sent_rmc_count)
-        return;
+    if (!GPS_RawGetSnapshot(&gps)) return;
+    bool ubx = gps.pvt_count != 0U;
+    if (ubx ? gps.pvt_count == sent_pvt_count : gps.rmc_decoded_count == sent_rmc_count) return;
     mavlink_gps_input_t input;
     if (!GPS_BuildInput(&gps, now, &input)) return;
     mavlink_message_t message;
@@ -162,8 +162,13 @@ static void ForwardGps(uint32_t now)
     uint16_t length = mavlink_msg_to_send_buffer(packet, &message);
     // 77 bytes take under 2ms at 460800 baud. RX DMA continues during polling TX.
     HAL_StatusTypeDef result = HAL_UART_Transmit(&MAV_UART, packet, length, 5);
-    last_tx_ms = now;
-    if (result == HAL_OK) sent_rmc_count = gps.rmc_decoded_count;
+    // Forward each new epoch once. Rate is set at the receiver (100 ms),
+    // rather than retransmitting stale data or losing epochs to timer jitter.
+    if (result == HAL_OK)
+    {
+        if (ubx) sent_pvt_count = gps.pvt_count;
+        else sent_rmc_count = gps.rmc_decoded_count;
+    }
     if (xSemaphoreTake(fc_mutex, portMAX_DELAY) == pdTRUE)
     {
         if (result == HAL_OK)

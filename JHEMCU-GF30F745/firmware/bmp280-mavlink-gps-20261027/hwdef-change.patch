@@ -1,9 +1,0 @@
---- bmp280-only
-+++ bmp280-and-mavlink-gps
-@@ -224,3 +224,6 @@
- 
- # Reduce firmware size for F745
- include ../include/minimize_fpv_osd.inc
-+
-+# Accept GPS_INPUT from the STM32 companion on the existing MAVLink link.
-+define AP_GPS_MAV_ENABLED 1

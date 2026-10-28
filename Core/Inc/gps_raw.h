@@ -4,9 +4,19 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "gps_nmea.h"
+#include "gps_ubx.h"
 
 #define GPS_RAW_SAMPLE_SIZE 24U
 #define GPS_RAW_LINE_SIZE 128U
+
+typedef enum
+{
+    GPS_CONFIG_WAIT,
+    GPS_CONFIG_SENT,
+    GPS_CONFIG_ACKED,
+    GPS_CONFIG_REJECTED,
+    GPS_CONFIG_TIMEOUT
+} GPS_ConfigState_t;
 
 typedef struct
 {
@@ -36,6 +46,21 @@ typedef struct
     uint32_t last_rmc_ms;
     uint32_t gsa_errors;
     uint32_t rmc_errors;
+    GPS_UbxPvt_t pvt;
+    GPS_UbxDop_t dop;
+    uint32_t dop_count;
+    uint32_t last_dop_ms;
+    uint32_t pvt_count;
+    uint32_t last_pvt_ms;
+    uint32_t pvt_step_ms;
+    uint32_t pvt_duplicates;
+    uint32_t pvt_gaps;
+    uint32_t ubx_errors;
+    uint32_t config_attempts;
+    uint32_t config_acks;
+    uint32_t config_naks;
+    uint32_t config_tx_errors;
+    GPS_ConfigState_t config_state;
 } GPS_RawSnapshot_t;
 
 void GPS_RawInit(void);
