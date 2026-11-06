@@ -31,6 +31,7 @@
 #include "usart.h"
 #include <stdio.h>
 #include <string.h>
+#include "led_strip.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -110,6 +111,11 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
   MAVLink_AppInit();
   GPS_RawInit();
+  if (LED_Strip_Init(80) != HAL_OK ||
+    LED_Strip_Fill(0, 0, 0, 0) != HAL_OK ||
+    LED_Strip_Show() != HAL_OK) {
+    Error_Handler();
+}
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -407,13 +413,38 @@ void led_blink1(void *argument)
 {
   /* USER CODE BEGIN led_blink1 */
   /* Infinite loop */
-  for(;;)
-  {
-    osDelay(500);
+
+uint8_t phase = 0;
+const uint8_t colours[3][3] = {
+    {0, 255, 0},  // Green
+    {255, 0, 0},  // Red
+    {0, 0, 255}   // Blue
+};
+for (;;) {
     HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
+    osDelay(500);
+    if (!LED_Strip_IsBusy()) {
+       // LED_Strip_Fill(255, 0, 0, 8);
+   
+        for (int i = 0; i < 80; i += 5) {
+            int c = ((i / 4) + phase) % 3;
+
+            LED_Strip_Set(i,
+                          colours[c][0],
+                          colours[c][1],
+                          colours[c][2],
+                          100);
+        }
+
+        if (LED_Strip_Show() == HAL_OK) {
+            phase = (phase + 1) % 3;
+        }
+    } 
+    LED_Strip_Show();                 // Apply all changes together
+}
   }
   /* USER CODE END led_blink1 */
-}
+
 
 /* USER CODE BEGIN Header_StartMavlinkTask */
 /**

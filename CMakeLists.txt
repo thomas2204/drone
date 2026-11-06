@@ -47,11 +47,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_nmea.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_input.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_ubx.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/led_strip.c
+    ${CMAKE_SOURCE_DIR}/ws2812b/ws2812-dma/ws2812_dma.c
 )
 
 # Include MAVLink C library
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/MAVLink
+    ${CMAKE_SOURCE_DIR}/ws2812b/ws2812-dma
 )
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
