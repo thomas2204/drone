@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "led_strip.h"
+#include "fatfs.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,7 +58,7 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for uart_bluetooth */
@@ -170,9 +171,29 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  static volatile FRESULT mount_result;
+static volatile FRESULT open_result;
+static volatile FRESULT read_result;
+static UINT bytes_read;
+static BYTE header[12];
+
+mount_result = f_mount(&SDFatFS, SDPath, 1);
+
+if (mount_result == FR_OK)
+{
+    open_result = f_open(&SDFile, "0:/sound1.wav", FA_READ);
+
+    if (open_result == FR_OK)
+    {
+        read_result = f_read(&SDFile, header, sizeof(header),
+                             &bytes_read);
+        f_close(&SDFile);
+    }
+}
   /* Infinite loop */
   for(;;)
   {
+    
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
@@ -442,9 +463,9 @@ for (;;) {
     } 
     LED_Strip_Show();                 // Apply all changes together
 }
-  }
+  
   /* USER CODE END led_blink1 */
-
+}
 
 /* USER CODE BEGIN Header_StartMavlinkTask */
 /**
