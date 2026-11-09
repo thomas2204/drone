@@ -31,6 +31,8 @@
 #include "usart.h"
 #include <stdio.h>
 #include <string.h>
+#include "led_strip.h"
+#include "fatfs.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +58,7 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for uart_bluetooth */
@@ -110,6 +112,11 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
   MAVLink_AppInit();
   GPS_RawInit();
+  if (LED_Strip_Init(80) != HAL_OK ||
+    LED_Strip_Fill(0, 0, 0, 0) != HAL_OK ||
+    LED_Strip_Show() != HAL_OK) {
+    Error_Handler();
+}
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -164,9 +171,29 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  static volatile FRESULT mount_result;
+static volatile FRESULT open_result;
+static volatile FRESULT read_result;
+static UINT bytes_read;
+static BYTE header[12];
+
+mount_result = f_mount(&SDFatFS, SDPath, 1);
+
+if (mount_result == FR_OK)
+{
+    open_result = f_open(&SDFile, "0:/sound1.wav", FA_READ);
+
+    if (open_result == FR_OK)
+    {
+        read_result = f_read(&SDFile, header, sizeof(header),
+                             &bytes_read);
+        f_close(&SDFile);
+    }
+}
   /* Infinite loop */
   for(;;)
   {
+    
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
@@ -184,14 +211,19 @@ void BLUETOOTH(void *argument)
   /* USER CODE BEGIN BLUETOOTH */
     char buffer[192];
     FC_Telemetry_t fc = {0};
-    GPS_RawSnapshot_t gps = {0};
+    static GPS_RawSnapshot_t gps;
+    uint32_t printed_gsa_count = 0;
+    uint32_t printed_rmc_count = 0;
+    uint32_t previous_pvt_count = 0, previous_tx_count = 0, previous_print_ms = 0;
 
     for (;;)
     {
         int length = 0;
+        bool telemetry_available = false;
 
         if (MAVLink_GetTelemetry(&fc))
         {
+            telemetry_available = true;
             uint32_t now = (uint32_t)(xTaskGetTickCount()
                                       * portTICK_PERIOD_MS);
             uint32_t attitude_age = now - fc.last_attitude_ms;
@@ -245,10 +277,75 @@ void BLUETOOTH(void *argument)
                               (uint16_t)length, 100);
         }
 
+        if (telemetry_available)
+        {
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS TX=%lu ERR=%lu LastFix=%u\r\n",
+                (unsigned long)fc.gps_tx_count, (unsigned long)fc.gps_tx_errors,
+                (unsigned int)fc.gps_tx_fix_type);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+        }
+
         if (GPS_RawGetSnapshot(&gps))
         {
             uint32_t now = (uint32_t)(xTaskGetTickCount()
                                       * portTICK_PERIOD_MS);
+            static const char *const config_names[] = {"WAIT", "SENT", "ACK", "NAK", "TIMEOUT"};
+            const char *config = (unsigned)gps.config_state < 5U
+                ? config_names[gps.config_state] : "UNKNOWN";
+            if (gps.pvt_count != 0U)
+            {
+                uint32_t elapsed = now - previous_print_ms;
+                uint32_t rx_rate = 0, tx_rate = 0;
+                if (previous_print_ms != 0U && elapsed != 0U)
+                {
+                    rx_rate = (uint32_t)((uint64_t)(gps.pvt_count - previous_pvt_count) * 10000ULL / elapsed);
+                    if (telemetry_available)
+                        tx_rate = (uint32_t)((uint64_t)(fc.gps_tx_count - previous_tx_count) * 10000ULL / elapsed);
+                }
+                previous_print_ms = now;
+                previous_pvt_count = gps.pvt_count;
+                previous_tx_count = fc.gps_tx_count;
+                uint32_t pvt_age = now - gps.last_pvt_ms;
+                length = snprintf(buffer, sizeof(buffer),
+                    "GPS PVT=%lu DOP=%lu RX=%lu.%luHz TX=%lu.%luHz Step=%lums Age=%lums Bad=%lu Dup=%lu Gap=%lu CFG=%s\r\n",
+                    (unsigned long)gps.pvt_count, (unsigned long)gps.dop_count,
+                    (unsigned long)(rx_rate / 10U), (unsigned long)(rx_rate % 10U),
+                    (unsigned long)(tx_rate / 10U), (unsigned long)(tx_rate % 10U),
+                    (unsigned long)gps.pvt_step_ms, (unsigned long)pvt_age,
+                    (unsigned long)gps.ubx_errors, (unsigned long)gps.pvt_duplicates,
+                    (unsigned long)gps.pvt_gaps, config);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                if (pvt_age >= 500U)
+                    length = snprintf(buffer, sizeof(buffer), "GPS UBX STALE age=%lu ms\r\n", (unsigned long)pvt_age);
+                else
+                    length = GPS_UbxFormatPvt(buffer, sizeof(buffer), &gps.pvt);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                if (pvt_age < 500U && gps.pvt.fix_ok)
+                {
+                    length = snprintf(buffer, sizeof(buffer),
+                        "GPS VEL N=%ld E=%ld D=%ld mm/s hAcc=%lu vAcc=%lu mm sAcc=%lu mm/s\r\n",
+                        (long)gps.pvt.velocity_n_mm_s, (long)gps.pvt.velocity_e_mm_s,
+                        (long)gps.pvt.velocity_d_mm_s,
+                        (unsigned long)gps.pvt.horizontal_accuracy_mm,
+                        (unsigned long)gps.pvt.vertical_accuracy_mm,
+                        (unsigned long)gps.pvt.speed_accuracy_mm_s);
+                    if (length > 0 && (size_t)length < sizeof(buffer))
+                        HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                }
+                osDelay(1000);
+                continue;
+            }
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS CFG=%s Try=%lu ACK=%lu NAK=%lu TxErr=%lu UBXBad=%lu PVT=0 (NMEA fallback)\r\n",
+                config, (unsigned long)gps.config_attempts, (unsigned long)gps.config_acks,
+                (unsigned long)gps.config_naks, (unsigned long)gps.config_tx_errors,
+                (unsigned long)gps.ubx_errors);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
             uint32_t age = now - gps.last_gga_ms;
 
             if (gps.gga_count == 0U)
@@ -270,6 +367,55 @@ void BLUETOOTH(void *argument)
             if (length > 0 && (size_t)length < sizeof(buffer))
                 HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
                                   (uint16_t)length, 100);
+
+            if (gps.gsa_count != printed_gsa_count)
+            {
+                length = snprintf(buffer, sizeof(buffer),
+                                  "GPS RAW GSA: %s\r\n", gps.gsa_line);
+                if (length > 0 && (size_t)length < sizeof(buffer) &&
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                      (uint16_t)length, 100) == HAL_OK)
+                    printed_gsa_count = gps.gsa_count;
+            }
+            if (gps.rmc_count != printed_rmc_count)
+            {
+                length = snprintf(buffer, sizeof(buffer),
+                                  "GPS RAW RMC: %s\r\n", gps.rmc_line);
+                if (length > 0 && (size_t)length < sizeof(buffer) &&
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
+                                      (uint16_t)length, 100) == HAL_OK)
+                    printed_rmc_count = gps.rmc_count;
+            }
+            if (gps.rmc_decoded_count != 0U)
+            {
+                char speed[24] = "N/A", course[24] = "N/A";
+                bool rmc_fresh = (uint32_t)(now - gps.last_rmc_ms) < 3000U;
+                bool gsa_fresh = gps.gsa_decoded_count != 0U &&
+                    (uint32_t)(now - gps.last_gsa_ms) < 3000U;
+                if (rmc_fresh && gps.rmc.speed_valid)
+                    snprintf(speed, sizeof(speed), "%lu.%03lu",
+                        (unsigned long)(gps.rmc.speed_mm_s / 1000U),
+                        (unsigned long)(gps.rmc.speed_mm_s % 1000U));
+                if (rmc_fresh && gps.rmc.course_valid)
+                    snprintf(course, sizeof(course), "%lu.%02lu",
+                        (unsigned long)(gps.rmc.course_cdeg / 100U),
+                        (unsigned long)(gps.rmc.course_cdeg % 100U));
+                if (rmc_fresh && gps.rmc.time_valid)
+                    length = snprintf(buffer, sizeof(buffer),
+                        "GPS NAV FixDim=%u UTC=%04u-%02u-%02u %02lu:%02lu:%02lu Speed=%s m/s Course=%s deg\r\n",
+                        gsa_fresh ? (unsigned int)gps.gsa.fix_dimension : 0U,
+                        (unsigned int)gps.rmc.year, (unsigned int)gps.rmc.month,
+                        (unsigned int)gps.rmc.day,
+                        (unsigned long)(gps.rmc.utc_ms / 3600000U),
+                        (unsigned long)(gps.rmc.utc_ms / 60000U % 60U),
+                        (unsigned long)(gps.rmc.utc_ms / 1000U % 60U), speed, course);
+                else
+                    length = snprintf(buffer, sizeof(buffer),
+                        "GPS NAV time unavailable/stale FixDim=%u Speed=%s m/s Course=%s deg\r\n",
+                        gsa_fresh ? (unsigned int)gps.gsa.fix_dimension : 0U, speed, course);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            }
         }
 
         osDelay(1000);
@@ -288,11 +434,36 @@ void led_blink1(void *argument)
 {
   /* USER CODE BEGIN led_blink1 */
   /* Infinite loop */
-  for(;;)
-  {
-    osDelay(500);
+
+uint8_t phase = 0;
+const uint8_t colours[3][3] = {
+    {0, 255, 0},  // Green
+    {255, 0, 0},  // Red
+    {0, 0, 255}   // Blue
+};
+for (;;) {
     HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
-  }
+    osDelay(500);
+    if (!LED_Strip_IsBusy()) {
+       // LED_Strip_Fill(255, 0, 0, 8);
+   
+        for (int i = 0; i < 80; i += 5) {
+            int c = ((i / 4) + phase) % 3;
+
+            LED_Strip_Set(i,
+                          colours[c][0],
+                          colours[c][1],
+                          colours[c][2],
+                          100);
+        }
+
+        if (LED_Strip_Show() == HAL_OK) {
+            phase = (phase + 1) % 3;
+        }
+    } 
+    LED_Strip_Show();                 // Apply all changes together
+}
+  
   /* USER CODE END led_blink1 */
 }
 

@@ -13,6 +13,9 @@ typedef struct
     uint32_t flight_mode;
     uint32_t heartbeat_count;
     uint32_t attitude_count;
+    uint32_t gps_tx_count;       // Successful local UART transmissions, not FC acknowledgments.
+    uint32_t gps_tx_errors;
+    uint8_t gps_tx_fix_type;
 
     float roll;       // radians
     float pitch;      // radians

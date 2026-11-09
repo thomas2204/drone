@@ -1,3 +1,13 @@
 build
 mx.scratch
 !.settings
+
+# Local diagnostics, firmware exports and backups live outside this repository.
+/analysis/
+/JHEMCU-GF30F745/
+/firmware/
+/ardupilot_param.param
+/dronetestv1.zip
+*.tlog
+*.rlog
+__pycache__/
