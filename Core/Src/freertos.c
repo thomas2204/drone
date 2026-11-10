@@ -95,7 +95,7 @@ osThreadId_t audio1Handle;
 const osThreadAttr_t audio1_attributes = {
   .name = "audio1",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -505,11 +505,30 @@ void StartGpsTask(void *argument)
 void audio(void *argument)
 {
   /* USER CODE BEGIN audio */
-  AudioPlayer_Play("0:/sound1.wav", 200); /* Volume: 0-200 percent. */
-
-  for(;;)
+  FC_Telemetry_t telemetry;
+  uint32_t last_mode = UINT32_MAX; /* No mode has been announced yet. */
+  AudioPlayer_Play("0:/sound1.wav", 20);
+  for (;;)
   {
-    osDelay(1000);
+    
+    if (MAVLink_GetTelemetry(&telemetry) &&
+        telemetry.heartbeat_count != 0U &&
+        telemetry.flight_mode != last_mode)
+    {
+      /* Remember first, so a missing WAV will not cause repeated attempts. */
+      last_mode = telemetry.flight_mode;
+
+      /* ArduPilot Copter mode IDs: 2 = Alt Hold, 5 = Loiter. */
+      if (last_mode == 2U)
+      {
+        AudioPlayer_Play("0:/althold.wav", 100);
+      }
+      else if (last_mode == 5U)
+      {
+        AudioPlayer_Play("0:/loiter.wav", 100);
+      }
+    }
+    osDelay(20);
   }
   /* USER CODE END audio */
 }

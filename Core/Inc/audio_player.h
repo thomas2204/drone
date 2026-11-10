@@ -33,6 +33,8 @@ extern volatile uint32_t audio_frames_played;
  * Volume is linear sample gain: 0 = mute, 100 = original, 200 = double amplitude.
  * Values above 200 are clamped to 200. Samples saturate at the 16-bit limits;
  * boosting loud files may therefore cause clipping/distortion.
+ * After normal completion, circular DMA continues sending silence to keep
+ * the amplifier's I2S clocks active. The next playback replaces that stream.
  * D-cache must remain disabled, as in the current project startup. */
 void AudioPlayer_Play(const char *path, uint8_t volume_percent);
 

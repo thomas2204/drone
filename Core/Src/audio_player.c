@@ -21,9 +21,10 @@ static uint32_t remaining;
 static uint32_t playback_volume_percent;
 static uint32_t half_frames[2];
 static bool last_half[2];
+static bool idle_silence_running;
 
 volatile AudioPlayerState audio_state = AUDIO_IDLE;
-volatile FRESULT audio_file_result = FR_OK;
+volatile FRESULT audio_file_result = FR_OK;   //simply debug shit
 volatile uint32_t audio_sai_error;
 volatile uint32_t audio_sample_rate;
 volatile uint32_t audio_channels;
@@ -31,28 +32,28 @@ volatile uint32_t audio_frames_played;
 
 static uint16_t LE16(const uint8_t *p)
 {
-    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));  //combine 2 byte
 }
 
 static uint32_t LE32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); //combine 4 byte
 }
 
 static bool ReadExact(void *buffer, UINT size)
 {
     UINT received = 0;
-    audio_file_result = f_read(&SDFile, buffer, size, &received);
-    if (audio_file_result != FR_OK || received != size)
+    audio_file_result = f_read(&SDFile, buffer, size, &received); //read file sand strore address
+    if (audio_file_result != FR_OK || received != size)  //read less byte or cannot read
     {
-        audio_state = AUDIO_READ_FAILED;
+        audio_state = AUDIO_READ_FAILED;  //debug
         return false;
     }
     return true;
 }
 
-static bool Seek(DWORD position)
+static bool Seek(DWORD position) //move in folder
 {
     audio_file_result = f_lseek(&SDFile, position);
     if (audio_file_result != FR_OK || f_tell(&SDFile) != position)
@@ -63,7 +64,7 @@ static bool Seek(DWORD position)
     return true;
 }
 
-static bool ReadHeader(void)
+static bool ReadHeader(void)  //find , checnk and read wav header
 {
     uint8_t header[16];
     uint32_t data_start = 0, data_size = 0;
@@ -71,15 +72,15 @@ static bool ReadHeader(void)
     uint32_t byte_rate = 0;
     bool have_format = false, have_data = false;
 
-    if (!ReadExact(header, 12)) return false;
-    if (memcmp(header, "RIFF", 4) || memcmp(header + 8, "WAVE", 4))
+    if (!ReadExact(header, 12)) return false; //error checking 
+    if (memcmp(header, "RIFF", 4) || memcmp(header + 8, "WAVE", 4))  //check riff , it comapre 2 string and expect 0
         goto invalid;
     uint32_t riff_size = LE32(header + 4);
     if (riff_size < 4 || f_size(&SDFile) < 8 || riff_size > f_size(&SDFile) - 8)
         goto invalid;
     uint32_t end = riff_size + 8;
 
-    while (f_tell(&SDFile) <= end && end - f_tell(&SDFile) >= 8)
+    while (f_tell(&SDFile) <= end && end - f_tell(&SDFile) >= 8) //continue as long as there are at least 8 bytes leftas teh fiel nto end and read chucnk by chunk
     {
         if (!ReadExact(header, 8)) return false;
         uint32_t size = LE32(header + 4);
@@ -172,7 +173,8 @@ void AudioPlayer_Play(const char *path, uint8_t volume_percent)
     audio_frames_played = 0;
     audio_sample_rate = 0;
     audio_channels = 0;
-    playback_thread = osThreadGetId();
+    /* Idle DMA callbacks must not notify us while the next file is prepared. */
+    playback_thread = NULL;
     osThreadFlagsClear(AUDIO_FLAGS);
 
     audio_state = AUDIO_MOUNTING;
@@ -197,7 +199,21 @@ void AudioPlayer_Play(const char *path, uint8_t volume_percent)
         audio_state = AUDIO_DONE;
         goto cleanup;
     }
+    if (idle_silence_running)
+    {
+        if (HAL_SAI_DMAStop(&hsai_BlockA2) != HAL_OK)
+        {
+            audio_state = AUDIO_DMA_FAILED;
+            goto cleanup;
+        }
+        idle_silence_running = false;
+    }
     if (!FillHalf(0, false) || !FillHalf(1, false)) goto cleanup;
+    playback_thread = osThreadGetId();
+    osThreadFlagsClear(AUDIO_FLAGS);
+    /* DMAStop leaves interrupt flags/masks behind; discard stale events. */
+    hsai_BlockA2.Instance->IMR = 0;
+    hsai_BlockA2.Instance->CLRFR = 0xFFFFFFFFU;
     HAL_NVIC_SetPriority(SAI2_IRQn, 5, 0);
     HAL_NVIC_ClearPendingIRQ(SAI2_IRQn);
     HAL_NVIC_EnableIRQ(SAI2_IRQn);
@@ -231,6 +247,13 @@ void AudioPlayer_Play(const char *path, uint8_t volume_percent)
         audio_frames_played += half_frames[half];
         if (last_half[half])
         {
+            /* The other half already contains silence. Clear the consumed
+             * final half too, and keep the clocks running with digital zeros.
+             * Some amplifiers are noisy when their I2S clocks disappear. */
+            memset(&output[half * HALF_SAMPLES], 0,
+                   HALF_SAMPLES * sizeof(output[0]));
+            idle_silence_running = true;
+            dma_running = false; /* Leave this silent transfer running. */
             audio_state = AUDIO_DONE;
             break;
         }
