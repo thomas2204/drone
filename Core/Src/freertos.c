@@ -89,6 +89,13 @@ const osThreadAttr_t gpsTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for thermal_task */
+osThreadId_t thermal_taskHandle;
+const osThreadAttr_t thermal_task_attributes = {
+  .name = "thermal_task",
+  .stack_size = 2048 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -100,6 +107,7 @@ void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
 void StartMavlinkTask(void *argument);
 void StartGpsTask(void *argument);
+void Thermal_record(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -150,6 +158,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of gpsTask */
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
+
+  /* creation of thermal_task */
+  thermal_taskHandle = osThreadNew(Thermal_record, NULL, &thermal_task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -496,6 +507,24 @@ void StartGpsTask(void *argument)
   osThreadSetPriority(osThreadGetId(), osPriorityNormal);
   GPS_RawTask();
   /* USER CODE END StartGpsTask */
+}
+
+/* USER CODE BEGIN Header_Thermal_record */
+/**
+* @brief Function implementing the thermal_task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Thermal_record */
+void Thermal_record(void *argument)
+{
+  /* USER CODE BEGIN Thermal_record */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(1);
+  }
+  /* USER CODE END Thermal_record */
 }
 
 /* Private application code --------------------------------------------------*/
