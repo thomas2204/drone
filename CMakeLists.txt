@@ -42,6 +42,7 @@ add_executable(${CMAKE_PROJECT_NAME})
 
 # Compile MAVLink application
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_SOURCE_DIR}/Core/Src/audio_player.c
     ${CMAKE_SOURCE_DIR}/Core/Src/mk_app.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_raw.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_nmea.c
