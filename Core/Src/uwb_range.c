@@ -1,0 +1,174 @@
+/* Initiator matching UWB-beacon-CMake-version/Core/Src/beacon_twr.c.
+ * Poll -> response carrying two LE32 timestamps; no final packet. */
+#include "uwb_range.h"
+#include "uwb_protocol.h"
+#include "main.h"
+#include "cmsis_os2.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include "deca_device_api.h"
+#include "dw3000_deca_regs.h"
+#include <string.h>
+
+extern int UWB_DriverProbe(void);
+extern void UWB_DriverFast(void);
+
+static UWB_RangeSnapshot shared, current;
+static uint8_t sequence;
+/* Preserve the port selected for the user's current antenna test. */
+static const dwt_rf_port_ctrl_e rf_port = DWT_RF_PORT_MANUAL_2;
+static dwt_config_t config = {
+    .chan = 5, .txPreambLength = DWT_PLEN_128, .rxPAC = DWT_PAC8,
+    .txCode = 9, .rxCode = 9, .sfdType = 1, .dataRate = DWT_BR_6M8,
+    .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD, .sfdTO = 129,
+    .stsMode = DWT_STS_MODE_OFF, .stsLength = DWT_STS_LEN_64,
+    .pdoaMode = DWT_PDOA_M0
+};
+static dwt_txconfig_t tx_rf = { 0x34, 0xfdfdfdfd, 0 };
+
+static void publish(void)
+{
+    taskENTER_CRITICAL();
+    shared = current;
+    taskEXIT_CRITICAL();
+}
+
+void UWB_RangeInit(void)
+{
+    memset(&current, 0, sizeof current);
+    current.init_result = 1;
+    current.rf_port = (uint8_t)rf_port;
+    /* Before osKernelStart the port's critical nesting is not initialized.
+     * A task critical section here leaves BASEPRI masked until scheduling.
+     * No other task exists yet, so this assignment needs no lock. */
+    shared = current;
+}
+
+void UWB_RangeTaskUnavailable(void)
+{
+    current.init_result = -5;
+    shared = current; /* Startup only, before the scheduler. */
+}
+
+bool UWB_RangeGetSnapshot(UWB_RangeSnapshot *out)
+{
+    if (out == NULL) return false;
+    taskENTER_CRITICAL();
+    *out = shared;
+    taskEXIT_CRITICAL();
+    return true;
+}
+
+static int initialise(void)
+{
+    current.init_result = 2; /* probing hardware */
+    publish();
+    int probe_result = UWB_DriverProbe();
+    if (probe_result != DWT_SUCCESS) return probe_result;
+    current.device_id = dwt_readdevid();
+    current.init_result = 3; /* reset / wait for idle */
+    publish();
+    dwt_softreset(0);
+    deca_sleep(2);
+    uint32_t start = HAL_GetTick();
+    while (!dwt_checkidlerc()) {
+        if ((uint32_t)(HAL_GetTick() - start) > 100U) return -2;
+        osDelay(1);
+    }
+    current.init_result = 4; /* driver initialization */
+    publish();
+    if (dwt_initialise(DWT_DW_INIT) != DWT_SUCCESS) return -3;
+    current.init_result = 5; /* radio configuration */
+    publish();
+    if (dwt_configure(&config) != DWT_SUCCESS) return -4;
+    dwt_configuretxrf(&tx_rf);
+    /* Single fitted antenna: keep TX and RX on the selected port. */
+    dwt_configure_rf_port(rf_port);
+    dwt_configciadiag(DW_CIA_DIAG_LOG_ALL);
+    /* Initial values only: calibrate antenna delays on both boards. */
+    dwt_setrxantennadelay(16385);
+    dwt_settxantennadelay(16385);
+    UWB_DriverFast();
+    dwt_setrxaftertxdelay(0);
+    dwt_setrxtimeout(6000); /* UWB us (~1.026 us); beacon replies at ~1.5 ms */
+    return 0;
+}
+
+static void range_once(void)
+{
+    uint8_t poll[] = {0x41, 0x88, 0, 0x9a, 0x60, 'W', 'A', 'V', 'E', 0xe0, 0, 0};
+    const uint32_t events = SYS_STATUS_RXFCG_BIT_MASK |
+        SYS_STATUS_ALL_RX_ERR | SYS_STATUS_ALL_RX_TO;
+    current.valid = false;
+    poll[2] = sequence++;
+    dwt_forcetrxoff();
+    dwt_writesysstatuslo(events | SYS_STATUS_TXFRS_BIT_MASK);
+    dwt_writetxdata(sizeof poll, poll, 0);
+    dwt_writetxfctrl(sizeof poll, 0, 1);
+    current.polls++;
+    if (dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED) != DWT_SUCCESS) {
+        current.errors++;
+        return;
+    }
+    uint32_t start = HAL_GetTick(), status;
+    bool tx_seen = false;
+    for (;;) {
+        status = dwt_readsysstatuslo();
+        if (!tx_seen && (status & SYS_STATUS_TXFRS_BIT_MASK)) {
+            current.transmitted++;
+            tx_seen = true;
+        }
+        if (status & events) break;
+        if ((uint32_t)(HAL_GetTick() - start) >= 20U) {
+            current.timeouts++;
+            dwt_forcetrxoff();
+            return;
+        }
+        osDelay(1);
+    }
+    dwt_writesysstatuslo(events | SYS_STATUS_TXFRS_BIT_MASK);
+    if (status & (SYS_STATUS_ALL_RX_ERR | SYS_STATUS_ALL_RX_TO)) {
+        if (status & SYS_STATUS_ALL_RX_TO) current.timeouts++;
+        else current.errors++;
+        return;
+    }
+    current.frames++;
+    dwt_cirdiags_t diagnostics;
+    current.rssi_valid =
+        dwt_readdiagnostics_acc(&diagnostics, DWT_ACC_IDX_IP_M) == DWT_SUCCESS &&
+        dwt_calculate_rssi(&diagnostics, DWT_ACC_IDX_IP_M, &current.rssi_q8) == DWT_SUCCESS;
+    uint8_t reply[20];
+    if ((dwt_read_reg(RX_FINFO_ID) & 0x3ffU) != sizeof reply) {
+        current.rejected++;
+        return;
+    }
+    dwt_readrxdata(reply, sizeof reply, 0);
+    uint32_t tx = dwt_readtxtimestamplo32();
+    uint32_t rx = dwt_readrxtimestamplo32(IPATOV);
+    if (!UWB_DecodeRange(reply, sizeof reply, poll[2], tx, rx,
+                         dwt_readclockoffset(), &current.distance_mm)) {
+        current.rejected++;
+        return;
+    }
+    current.last_update_ms = HAL_GetTick();
+    current.received++;
+    current.valid = true;
+}
+
+void UWB_RangeTask(void *argument)
+{
+    (void)argument;
+    /* Let Bluetooth/GPS start before touching the optional UWB hardware. */
+    osDelay(2000);
+    current.init_result = initialise();
+    publish();
+    if (current.init_result != 0) {
+        /* Keep the failure visible, and leave all other application tasks running. */
+        for (;;) osDelay(1000);
+    }
+    for (;;) {
+        range_once();
+        publish();
+        osDelay(100);
+    }
+}

@@ -20,14 +20,29 @@ HAL_StatusTypeDef LED_Strip_Init(uint16_t count)
     if (busy) return HAL_BUSY;
     if (count == 0U || count > LED_STRIP_MAX_LEDS || htim1.Instance != TIM1)
         return HAL_ERROR;
-    /* Current CubeMX configuration: 64 MHz TIM1 / 80 = 800 kHz. */
-    if (htim1.Init.Prescaler != 0U || htim1.Init.Period != 79U ||
-        HAL_RCC_GetPCLK2Freq() != 32000000U ||
-        (RCC->D2CFGR & RCC_D2CFGR_D2PPRE2) != RCC_APB2_DIV2 ||
-        (RCC->CFGR & RCC_CFGR_TIMPRE) != 0U ||
+    if (htim1.Init.Prescaler != 0U ||
         htim1.hdma[TIM_DMA_ID_CC3] == NULL ||
         htim1.hdma[TIM_DMA_ID_CC3]->Init.Mode != DMA_NORMAL)
         return HAL_ERROR;
+
+    /* TIM1 is on APB2. CubeMX now runs APB2 at 100 MHz rather than
+     * the old 32 MHz. Derive the timer period instead of rejecting boot
+     * or transmitting the old ARR=79 at the wrong bit rate. */
+    uint32_t apb_divider = RCC->D2CFGR & RCC_D2CFGR_D2PPRE2;
+    uint32_t timer_clock = HAL_RCC_GetPCLK2Freq();
+    if ((RCC->CFGR & RCC_CFGR_TIMPRE) == 0U) {
+        if (apb_divider != RCC_APB2_DIV1) timer_clock *= 2U;
+    } else {
+        if (apb_divider == RCC_APB2_DIV1 || apb_divider == RCC_APB2_DIV2 ||
+            apb_divider == RCC_APB2_DIV4)
+            timer_clock = HAL_RCC_GetHCLKFreq();
+        else timer_clock *= 4U;
+    }
+    uint32_t period = timer_clock / 800000U;
+    if (timer_clock % 800000U != 0U || period < 3U || period > 65535U)
+        return HAL_ERROR;
+    htim1.Init.Period = period - 1U;
+    __HAL_TIM_SET_AUTORELOAD(&htim1, htim1.Init.Period);
 
     memset(pwm, 0, sizeof(pwm));
     strip.htim = &htim1;

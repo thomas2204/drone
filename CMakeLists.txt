@@ -66,6 +66,20 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# Qorvo DW3000 driver and the drone's SS-TWR initiator.
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    Core/Src/uwb_range.c
+    Core/Src/uwb_protocol.c
+    Core/Src/uwb_dw_port.c
+    Drivers/UWB/deca_interface.c
+    Drivers/UWB/deca_compat.c
+    Drivers/UWB/deca_rsl.c
+    Drivers/UWB/dw3000/dw3000_device.c
+    Drivers/UWB/lib/qmath/src/qmath.c
+)
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+    Drivers/UWB Drivers/UWB/dw3000 Drivers/UWB/lib/qmath/include
+)
 # Generated FatFs heap allocation uses pvPortMalloc/vPortFree; CMSIS-RTOS2
 # does not expose their declarations. Keep this fix outside generated files.
 target_compile_options(FatFs PRIVATE "$<$<COMPILE_LANGUAGE:C>:-includeFreeRTOS.h>")

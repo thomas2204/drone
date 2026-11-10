@@ -34,6 +34,7 @@
 #include "led_strip.h"
 #include "fatfs.h"
 #include "audio_player.h"
+#include "uwb_range.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -119,6 +120,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
+  UWB_RangeInit();
   MAVLink_AppInit();
   GPS_RawInit();
   if (LED_Strip_Init(80) != HAL_OK ||
@@ -164,6 +166,13 @@ void MX_FREERTOS_Init(void) {
   audio1Handle = osThreadNew(audio, NULL, &audio1_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  static const osThreadAttr_t uwb_attributes = {
+      .name = "uwb_range", .stack_size = 4096, .priority = osPriorityLow
+  };
+  osThreadId_t uwb_handle = osThreadNew(UWB_RangeTask, NULL, &uwb_attributes);
+  /* Optional hardware must not stop GPS/Bluetooth if allocation fails. */
+  if (uwb_handle == NULL) UWB_RangeTaskUnavailable();
+  (void)uwb_handle;
   /* Fail visibly rather than silently losing a task if allocation fails. */
   configASSERT(defaultTaskHandle != NULL);
   configASSERT(uart_bluetoothHandle != NULL);
@@ -272,6 +281,36 @@ void BLUETOOTH(void *argument)
         {
             HAL_UART_Transmit(&huart7, (uint8_t *)buffer,
                               (uint16_t)length, 100);
+        }
+
+        UWB_RangeSnapshot uwb;
+        if (UWB_RangeGetSnapshot(&uwb))
+        {
+            uint32_t age = HAL_GetTick() - uwb.last_update_ms;
+            if (uwb.init_result != 0)
+                length = snprintf(buffer, sizeof(buffer), "UWB init=%d ID=%08lx\r\n",
+                    uwb.init_result, (unsigned long)uwb.device_id);
+            else if (uwb.valid && age < 1000U)
+                length = snprintf(buffer, sizeof(buffer), "UWB distance=%ld.%03ld m RX=%lu age=%lums\r\n",
+                    (long)(uwb.distance_mm / 1000), (long)(uwb.distance_mm % 1000),
+                    (unsigned long)uwb.received, (unsigned long)age);
+            else
+                length = snprintf(buffer, sizeof(buffer), "UWB NO RANGE polls=%lu TX=%lu RX=%lu TO=%lu ERR=%lu BAD=%lu\r\n",
+                    (unsigned long)uwb.polls, (unsigned long)uwb.transmitted, (unsigned long)uwb.received,
+                    (unsigned long)uwb.timeouts, (unsigned long)uwb.errors,
+                    (unsigned long)uwb.rejected);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            if (uwb.init_result == 0) {
+                if (uwb.rssi_valid)
+                    length = snprintf(buffer, sizeof(buffer), "UWB RF=%u frames=%lu lastRSSI=%ddBm\r\n",
+                        (unsigned)uwb.rf_port, (unsigned long)uwb.frames, (int)(uwb.rssi_q8 / 256));
+                else
+                    length = snprintf(buffer, sizeof(buffer), "UWB RF=%u frames=%lu lastRSSI=unavailable\r\n",
+                        (unsigned)uwb.rf_port, (unsigned long)uwb.frames);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            }
         }
 
         if (telemetry_available)
