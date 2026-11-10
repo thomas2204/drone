@@ -215,26 +215,6 @@ SECTIONS
   PROVIDE( __arm64_tls_tcb_offset = MAX(16, __tls_align) );
 
 
-  /* SDMMC1 IDMA buffers must be in AXI SRAM. */
-  .sd_dma_buffer (NOLOAD) :
-  {
-    . = ALIGN(32);
-    *(.sd_dma_buffer)
-    *(.sd_dma_buffer*)
-    . = ALIGN(32);
-  } >RAM
-
-  .dma_buffer (NOLOAD) :
-{
-    . = ALIGN(32);
-
-    *(.dma_buffer)
-    *(.dma_buffer*)
-
-    . = ALIGN(32);
-} >RAM_D2   /*set the memory of dam to RAM_D2 */
-
-
   .bss (NOLOAD) : ALIGN(4)
   {
     *(.bss)

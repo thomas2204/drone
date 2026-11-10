@@ -30,8 +30,9 @@ extern volatile uint32_t audio_frames_played;
 
 /* Plays once, blocking the calling RTOS task while DMA transmits audio.
  * Supports 48 kHz, signed 16-bit PCM WAV, mono or stereo.
- * Volume is linear sample gain: 0 = mute, 100 = original level.
- * Values above 100 are clamped to 100.
+ * Volume is linear sample gain: 0 = mute, 100 = original, 200 = double amplitude.
+ * Values above 200 are clamped to 200. Samples saturate at the 16-bit limits;
+ * boosting loud files may therefore cause clipping/distortion.
  * D-cache must remain disabled, as in the current project startup. */
 void AudioPlayer_Play(const char *path, uint8_t volume_percent);
 

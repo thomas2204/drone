@@ -36,6 +36,12 @@ enable_language(C ASM)
 
 add_executable(${CMAKE_PROJECT_NAME})
 
+# Application-owned linker extension; CubeMX may regenerate the base script.
+set(APP_DMA_LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/linker/dma_sections.ld")
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-T${APP_DMA_LINKER_SCRIPT}")
+set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY
+    LINK_DEPENDS "${APP_DMA_LINKER_SCRIPT}")
+
 # ==========================================
 # Custom MAVLink application
 # ==========================================

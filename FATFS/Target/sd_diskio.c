@@ -65,7 +65,7 @@ See BSP_SD_ErrorCallback() and BSP_SD_AbortCallback() below
  * BSP_SD_Init() elsewhere in the application.
  */
 /* USER CODE BEGIN disableSDInit */
- #define DISABLE_SD_INIT 
+#define DISABLE_SD_INIT
 /* USER CODE END disableSDInit */
 
 /*

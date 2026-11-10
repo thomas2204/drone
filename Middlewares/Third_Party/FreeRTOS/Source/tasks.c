@@ -3631,8 +3631,7 @@ static portTASK_FUNCTION( prvIdleTask, pvParameters )
             else if( listCURRENT_LIST_LENGTH( &xSuspendedTaskList ) == ( uxCurrentNumberOfTasks - uxNonApplicationTasks ) )
             {
                 /* If all the tasks are in the suspended list (which might mean they
-                 * have an infinite block 37797
-                 time rather than actually being suspended)
+                 * have an infinite block time rather than actually being suspended)
                  * then it is safe to turn all clocks off and just wait for external
                  * interrupts. */
                 eReturn = eNoTasksWaitingTimeout;

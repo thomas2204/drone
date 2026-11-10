@@ -127,6 +127,14 @@ invalid:
     return false;
 }
 
+static int16_t ApplyVolume(int16_t sample)
+{
+    int32_t scaled = ((int32_t)sample * (int32_t)playback_volume_percent) / 100;
+    if (scaled > INT16_MAX) return INT16_MAX;
+    if (scaled < INT16_MIN) return INT16_MIN;
+    return (int16_t)scaled;
+}
+
 static bool FillHalf(uint32_t half, bool streaming)
 {
     uint32_t frame_bytes = audio_channels * 2U;
@@ -143,11 +151,9 @@ static bool FillHalf(uint32_t half, bool streaming)
     uint32_t frames = size / frame_bytes;
     for (uint32_t i = 0; i < frames; ++i)
     {
-        destination[2U * i] =
-            ((int32_t)input[audio_channels * i] * (int32_t)playback_volume_percent) / 100;
+        destination[2U * i] = ApplyVolume(input[audio_channels * i]);
         destination[2U * i + 1U] =
-            ((int32_t)input[audio_channels * i + audio_channels - 1U] *
-             (int32_t)playback_volume_percent) / 100;
+            ApplyVolume(input[audio_channels * i + audio_channels - 1U]);
     }
     memset(destination + frames * 2U, 0,
            (HALF_SAMPLES - frames * 2U) * sizeof(int16_t));
@@ -160,7 +166,7 @@ static bool FillHalf(uint32_t half, bool streaming)
 void AudioPlayer_Play(const char *path, uint8_t volume_percent)
 {
     bool file_open = false, dma_running = false;
-    playback_volume_percent = volume_percent > 100U ? 100U : volume_percent;
+    playback_volume_percent = volume_percent > 200U ? 200U : volume_percent;
     audio_file_result = FR_OK;
     audio_sai_error = 0;
     audio_frames_played = 0;

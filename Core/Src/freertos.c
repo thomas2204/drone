@@ -90,6 +90,13 @@ const osThreadAttr_t gpsTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for audio1 */
+osThreadId_t audio1Handle;
+const osThreadAttr_t audio1_attributes = {
+  .name = "audio1",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -101,6 +108,7 @@ void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
 void StartMavlinkTask(void *argument);
 void StartGpsTask(void *argument);
+void audio(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -152,8 +160,17 @@ void MX_FREERTOS_Init(void) {
   /* creation of gpsTask */
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
 
+  /* creation of audio1 */
+  audio1Handle = osThreadNew(audio, NULL, &audio1_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* Fail visibly rather than silently losing a task if allocation fails. */
+  configASSERT(defaultTaskHandle != NULL);
+  configASSERT(uart_bluetoothHandle != NULL);
+  configASSERT(led_blinkHandle != NULL);
+  configASSERT(mavlinkTaskHandle != NULL);
+  configASSERT(gpsTaskHandle != NULL);
+  configASSERT(audio1Handle != NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -172,8 +189,6 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  AudioPlayer_Play("0:/sound1.wav", 100); /* Volume: 0-100 percent. */
-
   for (;;)
   {
     osDelay(1000);
@@ -478,6 +493,25 @@ void StartGpsTask(void *argument)
   osThreadSetPriority(osThreadGetId(), osPriorityNormal);
   GPS_RawTask();
   /* USER CODE END StartGpsTask */
+}
+
+/* USER CODE BEGIN Header_audio */
+/**
+* @brief Function implementing the audio1 thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_audio */
+void audio(void *argument)
+{
+  /* USER CODE BEGIN audio */
+  AudioPlayer_Play("0:/sound1.wav", 200); /* Volume: 0-200 percent. */
+
+  for(;;)
+  {
+    osDelay(1000);
+  }
+  /* USER CODE END audio */
 }
 
 /* Private application code --------------------------------------------------*/
