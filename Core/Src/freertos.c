@@ -33,6 +33,7 @@
 #include <string.h>
 #include "led_strip.h"
 #include "fatfs.h"
+#include "audio_player.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -89,12 +90,12 @@ const osThreadAttr_t gpsTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for thermal_task */
-osThreadId_t thermal_taskHandle;
-const osThreadAttr_t thermal_task_attributes = {
-  .name = "thermal_task",
-  .stack_size = 2048 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
+/* Definitions for audio1 */
+osThreadId_t audio1Handle;
+const osThreadAttr_t audio1_attributes = {
+  .name = "audio1",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -107,7 +108,7 @@ void BLUETOOTH(void *argument);
 void led_blink1(void *argument);
 void StartMavlinkTask(void *argument);
 void StartGpsTask(void *argument);
-void Thermal_record(void *argument);
+void audio(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -159,11 +160,17 @@ void MX_FREERTOS_Init(void) {
   /* creation of gpsTask */
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
 
-  /* creation of thermal_task */
-  thermal_taskHandle = osThreadNew(Thermal_record, NULL, &thermal_task_attributes);
+  /* creation of audio1 */
+  audio1Handle = osThreadNew(audio, NULL, &audio1_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* Fail visibly rather than silently losing a task if allocation fails. */
+  configASSERT(defaultTaskHandle != NULL);
+  configASSERT(uart_bluetoothHandle != NULL);
+  configASSERT(led_blinkHandle != NULL);
+  configASSERT(mavlinkTaskHandle != NULL);
+  configASSERT(gpsTaskHandle != NULL);
+  configASSERT(audio1Handle != NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -182,30 +189,9 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  static volatile FRESULT mount_result;
-static volatile FRESULT open_result;
-static volatile FRESULT read_result;
-static UINT bytes_read;
-static BYTE header[12];
-
-mount_result = f_mount(&SDFatFS, SDPath, 1);
-
-if (mount_result == FR_OK)
-{
-    open_result = f_open(&SDFile, "0:/sound1.wav", FA_READ);
-
-    if (open_result == FR_OK)
-    {
-        read_result = f_read(&SDFile, header, sizeof(header),
-                             &bytes_read);
-        f_close(&SDFile);
-    }
-}
-  /* Infinite loop */
-  for(;;)
+  for (;;)
   {
-    
-    osDelay(1);
+    osDelay(1000);
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -509,22 +495,23 @@ void StartGpsTask(void *argument)
   /* USER CODE END StartGpsTask */
 }
 
-/* USER CODE BEGIN Header_Thermal_record */
+/* USER CODE BEGIN Header_audio */
 /**
-* @brief Function implementing the thermal_task thread.
+* @brief Function implementing the audio1 thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_Thermal_record */
-void Thermal_record(void *argument)
+/* USER CODE END Header_audio */
+void audio(void *argument)
 {
-  /* USER CODE BEGIN Thermal_record */
-  /* Infinite loop */
+  /* USER CODE BEGIN audio */
+  AudioPlayer_Play("0:/sound1.wav", 200); /* Volume: 0-200 percent. */
+
   for(;;)
   {
-    osDelay(1);
+    osDelay(1000);
   }
-  /* USER CODE END Thermal_record */
+  /* USER CODE END audio */
 }
 
 /* Private application code --------------------------------------------------*/

@@ -22,6 +22,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "sai.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -339,5 +340,10 @@ void DCMI_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+
+void SAI2_IRQHandler(void)
+{
+  HAL_SAI_IRQHandler(&hsai_BlockA2);
+}
 
 /* USER CODE END 1 */

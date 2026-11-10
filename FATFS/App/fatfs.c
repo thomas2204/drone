@@ -25,6 +25,13 @@ FIL SDFile;       /* File object for SD */
 
 /* USER CODE BEGIN Variables */
 
+/* Apply DMA placement to CubeMX's definitions without editing generated lines.
+ * GCC applies these attributes to the declarations of the same objects above. */
+extern FATFS SDFatFS
+    __attribute__((section(".sd_dma_buffer"), aligned(32)));
+extern FIL SDFile
+    __attribute__((section(".sd_dma_buffer"), aligned(32)));
+
 /* USER CODE END Variables */
 
 void MX_FATFS_Init(void)
