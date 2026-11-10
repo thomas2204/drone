@@ -1,0 +1,3 @@
+../Core/Inc/dwt_uwb_driver/deca_rsl.c:66:16:rsl_calculate	56	static
+../Core/Inc/dwt_uwb_driver/deca_rsl.c:108:9:rsl_calculate_signal_power	32	static
+../Core/Inc/dwt_uwb_driver/deca_rsl.c:119:9:rsl_calculate_first_path_power	40	static
