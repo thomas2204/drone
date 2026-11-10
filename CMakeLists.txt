@@ -66,6 +66,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# Generated FatFs heap allocation uses pvPortMalloc/vPortFree; CMSIS-RTOS2
+# does not expose their declarations. Keep this fix outside generated files.
+target_compile_options(FatFs PRIVATE "$<$<COMPILE_LANGUAGE:C>:-includeFreeRTOS.h>")
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
