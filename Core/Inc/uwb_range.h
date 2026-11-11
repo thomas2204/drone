@@ -13,6 +13,8 @@ typedef struct {
     bool rssi_valid;
     uint8_t rf_port;
     uint32_t tx_power_readback, chan_readback, rf_switch_readback;
+    uint16_t preamble_readback, sfd_timeout_readback;
+    uint8_t bitrate_readback, pac_readback;
     uint32_t cir_power;
     uint16_t accumulation_count;
     uint8_t dgc_decision;

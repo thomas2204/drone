@@ -18,13 +18,16 @@ as open drain with no pull-up, holds reset low for 2 ms, then releases it for
 the MCU must never drive RSTn high in push-pull mode. After probing, the driver
 also performs its software reset.
 
-Both boards use channel 5, preamble 128, PAC8, preamble codes 9, SFD type 1,
-6.8 Mbps, standard PHR, STS off and PDoA mode 0. The poll is 12 bytes including
+The current pulled F103 profile and drone use channel 5, preamble 256, PAC16,
+preamble codes 9, SFD type 2 (Qorvo 16 symbols), SFD timeout 257,
+850 kbps, standard PHR, STS off and PDoA mode 0. Both request FEFEFEFE TX power.
+The poll is 12 bytes including
 hardware CRC; the response is 20 bytes, with little-endian poll-RX and response-TX
 timestamps at offsets 10 and 14. The response must echo the poll sequence number.
 
-The task starts an exchange about every 100 ms, allows roughly 6 ms for reception,
-and has a 20 ms software deadline. It checks frame length, address/header, function
+The beacon now schedules its response 2500 us after poll reception. The drone
+starts an exchange about every 100 ms, allows 10000 UUS (about 10.26 ms) for
+reception, and has a 25 ms software deadline. It checks frame length, address/header, function
 and sequence before computing distance. Clock offset correction and unsigned
 timestamp subtraction handle crystal drift and low-32-bit timestamp rollover.
 Invalid frames and failed exchanges are counted, with stale results marked invalid.
@@ -37,8 +40,17 @@ The firmware is `build/Debug/projects.elf`. Flash using your existing debug setu
 power the beacon, and view the existing UART7 Bluetooth output. Example:
 
 ```text
-UWB distance=2.345 m RX=42 age=32ms
+Yaw=13 deg Roll=0 deg Arm=DISARMED
+UWB: 2.345 m | Signal: -85 dBm
+GPS UBX NO FIX Type=0 Sat=0
 ```
+
+Bluetooth now prints only attitude/arm state, UWB distance and signal strength,
+and GPS fix information once per second. Configuration dumps, counters, GPS
+TX/RX rates, raw NMEA and error statistics are hidden. Missing or stale data
+uses a short status message. Internal diagnostics remain in `UWB_RangeSnapshot`
+for debugger/API access; the diagnostic line formats described below refer to
+the earlier verbose Bluetooth build, not the current display.
 
 The radio uses the `rf_port` selection in `Core/Src/uwb_range.c` (currently
 manual RF2, preserving the user's port test). The Bluetooth `RF` field is taken
@@ -54,7 +66,11 @@ connector, because the inactive RF path can still couple some signal.
 
 `UWB CFG` contains real register readbacks, refreshed once per second by the
 UWB task. `ok=1` checks transmit power, channel, TX/RX preamble codes, SFD type
-and the manual RF-port selector. It does not verify radiated power or antennas.
+the manual RF-port selector, data rate, preamble length, PAC and SFD timeout.
+It does not verify radiated power or antennas. For the current profile expect
+`PWR=FEFEFEFE`, `CH=0000094C`, and a separate PHY line showing
+`rate=850k preamble=256 PAC=16 SFD_TO=257`. RF2 remains selected on the drone;
+the beacon's RF1 setting is independent and should correspond to its own antenna.
 `UWB RSSIraw` prints channel-impulse-response power C, accumulated preamble
 symbols N and receiver gain decision D for an independent RSSI calculation:
 `10*log10(C*2^21/N^2) + 6*D - 121.7` for the current PRF64 Ipatov settings.
@@ -135,6 +151,9 @@ without HAL errors but returned device ID 0x00000000 while reset was held.
 
 ## Maximum TX-power test
 
+Historical test: the current pulled peer profile uses FEFEFEFE on both boards,
+as described above. The following section records the earlier maximum-power test.
+
 On November 11 the drone's requested TX_POWER was changed from FDFDFDFD to
 FFFFFFFF at the user's request. Each 0xFF byte encodes fine gain 63 and coarse
 gain 3, applied to all four packet sections. PGdly stays 0x34 and PGcount stays
@@ -161,3 +180,24 @@ drone's power helps the poll direction, not the beacon's reply power.
 Encoding/gain reference: Qorvo's `dw3000_txpower_adjustment.c` in Google's UWB
 driver tree, commit 713ccd47900ecb22590e580f9407a5c9479b3062, and DW3000
 datasheet section 3.11.2.
+
+## Review of the newly pulled F103 profile
+
+The lower data rate, longer preamble, matching PAC16 and 16-symbol SFD form a
+reasonable profile for a weak link, trading airtime for reception robustness.
+Qorvo's driver identifies PAC16 as the recommended acquisition chunk for a
+256-symbol preamble. The datasheet's sensitivity improvements are specified
+under particular test conditions, so no exact dB or distance gain is claimed
+for this specific combination. FEFEFEFE is coarse gain 2 / fine gain 63, about
+0.5 dB below maximum coarse gain 3 / fine gain 63; the PHY changes, rather than
+more power relative to the previous maximum-power test, are the main change.
+
+The F103 comments saying 6.8 Mbps and 8-symbol SFD are stale; the actual values
+are 850 kbps and SFD type 2 (16 symbols). The beacon's receive-error recovery is
+now fixed and diagnostic reads occur after its response transmission.
+No F103 files were edited during this review.
+
+Run `tests/check-uwb-peer-profile.ps1` to compile and compare all 13 actual radio
+initializer fields from both source files. The protocol test also checks the
+new 2.5 ms timestamp turnaround. Firmware readback checks verify the current
+PHY settings; on-air improvement requires both boards to run this profile.

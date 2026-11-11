@@ -17,14 +17,21 @@ static UWB_RangeSnapshot shared, current;
 static uint8_t sequence;
 /* Preserve the port selected for the user's current antenna test. */
 static const dwt_rf_port_ctrl_e rf_port = DWT_RF_PORT_MANUAL_2;
+/* Match the newly pulled F103 PHY. Its response is scheduled 2500 us after
+ * poll RX. Keep a 10000-UUS (~10.26 ms) receive window for the slower frames. */
+#define UWB_RX_TIMEOUT_UUS 10000U
+#define UWB_EXCHANGE_TIMEOUT_MS 25U
 static dwt_config_t config = {
     .chan = 5, .txPreambLength = DWT_PLEN_256, .rxPAC = DWT_PAC16,
-    .txCode = 9, .rxCode = 9, .sfdType = 2, .dataRate = DWT_BR_850K,
-    .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD, .sfdTO = 257,
+    .txCode = 9, .rxCode = 9, .sfdType = 2, /* Qorvo 16-symbol SFD */
+    .dataRate = DWT_BR_850K,
+    .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD,
+    .sfdTO = (256 + 1 + 16 - 16),
     .stsMode = DWT_STS_MODE_OFF, .stsLength = DWT_STS_LEN_64,
     .pdoaMode = DWT_PDOA_M0
 };
-static dwt_txconfig_t tx_rf = { 0x34, 0xfefefefe, 0 };
+/* Match the peer's requested power; FE is coarse=2/fine=63, not maximum FF. */
+static dwt_txconfig_t tx_rf = { .PGdly = 0x34, .power = 0xFEFEFEFEUL, .PGcount = 0 };
 
 
 static void publish(void)
@@ -66,6 +73,14 @@ static void read_config(void)
     current.tx_power_readback = dwt_read_reg(TX_POWER_ID);
     current.chan_readback = dwt_read_reg(CHAN_CTRL_ID);
     current.rf_switch_readback = dwt_read_reg(RF_SWITCH_CTRL_ID);
+    uint32_t tx_fctrl = dwt_read_reg(TX_FCTRL_ID);
+    uint32_t tx_fctrl_hi = dwt_read_reg(TX_FCTRL_HI_ID);
+    uint32_t dtune = dwt_read_reg(DTUNE0_ID);
+    current.preamble_readback = (uint16_t)((((tx_fctrl_hi & TX_FCTRL_HI_FINE_PLEN_BIT_MASK) >>
+        TX_FCTRL_HI_FINE_PLEN_BIT_OFFSET) + 1U) * 8U);
+    current.bitrate_readback = (uint8_t)((tx_fctrl & TX_FCTRL_TXBR_BIT_MASK) >> TX_FCTRL_TXBR_BIT_OFFSET);
+    current.pac_readback = (uint8_t)(dtune & DTUNE0_PRE_PAC_SYM_BIT_MASK);
+    current.sfd_timeout_readback = (uint16_t)(dtune >> DTUNE0_RX_SFD_TOC_BIT_OFFSET);
     const uint32_t chan_mask = CHAN_CTRL_RX_PCODE_BIT_MASK |
         CHAN_CTRL_TX_PCODE_BIT_MASK | CHAN_CTRL_SFD_TYPE_BIT_MASK | CHAN_CTRL_RF_CHAN_BIT_MASK;
     const uint32_t expected_chan = ((uint32_t)config.rxCode << CHAN_CTRL_RX_PCODE_BIT_OFFSET) |
@@ -76,7 +91,10 @@ static void read_config(void)
         ((uint32_t)rf_port << RF_SWITCH_CTRL_ANTSWCTRL_BIT_OFFSET);
     current.config_verified = current.tx_power_readback == tx_rf.power &&
         (current.chan_readback & chan_mask) == expected_chan &&
-        (current.rf_switch_readback & rf_mask) == expected_rf;
+        (current.rf_switch_readback & rf_mask) == expected_rf &&
+        current.preamble_readback == config.txPreambLength &&
+        current.bitrate_readback == config.dataRate && current.pac_readback == config.rxPAC &&
+        current.sfd_timeout_readback == config.sfdTO;
 }
 
 static int initialise(void)
@@ -111,7 +129,7 @@ static int initialise(void)
     UWB_DriverFast();
     read_config();
     dwt_setrxaftertxdelay(0);
-    dwt_setrxtimeout(10000); /* UWB us (~1.026 us); beacon replies at ~1.5 ms */
+    dwt_setrxtimeout(UWB_RX_TIMEOUT_UUS);
     return 0;
 }
 
@@ -140,7 +158,7 @@ static void range_once(void)
             tx_seen = true;
         }
         if (status & events) break;
-        if ((uint32_t)(HAL_GetTick() - start) >= 20U) {
+        if ((uint32_t)(HAL_GetTick() - start) >= UWB_EXCHANGE_TIMEOUT_MS) {
             current.timeouts++;
             dwt_forcetrxoff();
             return;

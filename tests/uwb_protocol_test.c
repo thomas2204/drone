@@ -21,6 +21,14 @@ int main(void)
     assert(UWB_DecodeRange(frame, 20, 255, poll_tx,
         poll_tx + turnaround + 4264U, 0, &mm));
     assert(mm >= 9990 && mm <= 10010);
+    /* New 850 kbps responder uses a 2.5 ms turnaround. It is carried in
+     * the response, so the initiator must not assume the old 1.5 ms value. */
+    uint32_t new_turnaround = 2500U * 63898U;
+    put32(frame + 14, beacon_rx + new_turnaround);
+    assert(UWB_DecodeRange(frame, 20, 255, poll_tx,
+        poll_tx + new_turnaround + 4264U, 0, &mm));
+    assert(mm >= 9990 && mm <= 10010);
+    put32(frame + 14, beacon_rx + turnaround);
     /* Verify correction sign for each clock drift direction. */
     for (int offset = -1200; offset <= 1200; offset += 2400) {
         uint32_t local_delay = (uint32_t)(turnaround * (1.0 - offset / 67108864.0) + 0.5);

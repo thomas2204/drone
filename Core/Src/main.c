@@ -127,10 +127,6 @@ __HAL_RCC_D2SRAM1_CLK_ENABLE();
   MX_UART7_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
-  /* Before any task initialization, so a startup failure is distinguishable
-   * from a radio timeout. UART7 is the existing Bluetooth connection. */
-  static const uint8_t boot_message[] = "BOOT: peripherals ready, starting RTOS\r\n";
-  HAL_UART_Transmit(&huart7, (uint8_t *)boot_message, sizeof boot_message - 1U, 100);
   /* USER CODE END 2 */
 
   /* Init scheduler */
