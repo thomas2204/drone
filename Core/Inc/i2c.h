@@ -29,7 +29,7 @@ extern "C" {
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
-
+#include "cmsis_os2.h"
 /* USER CODE END Includes */
 
 extern I2C_HandleTypeDef hi2c1;
@@ -39,7 +39,10 @@ extern I2C_HandleTypeDef hi2c2;
 extern I2C_HandleTypeDef hi2c3;
 
 /* USER CODE BEGIN Private defines */
-
+/* Created by MX_FREERTOS_Init. All task-level users of hi2c1 must acquire
+ * this mutex for the entire transaction, including asynchronous completion.
+ * Do not acquire/release a mutex from an ISR. */
+extern osMutexId_t i2c1MutexHandle;
 /* USER CODE END Private defines */
 
 void MX_I2C1_Init(void);

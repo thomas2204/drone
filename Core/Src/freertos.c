@@ -35,6 +35,7 @@
 #include "fatfs.h"
 #include "audio_player.h"
 #include "uwb_range.h"
+#include "i2c.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -98,6 +99,19 @@ const osThreadAttr_t audio1_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for thermalTask */
+osThreadId_t thermalTaskHandle;
+const osThreadAttr_t thermalTask_attributes = {
+  .name = "thermalTask",
+  .stack_size = 2048 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+/* Definitions for i2c1Mutex */
+osMutexId_t i2c1MutexHandle;
+const osMutexAttr_t i2c1Mutex_attributes = {
+  .name = "i2c1Mutex",
+  .attr_bits = osMutexPrioInherit,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -110,8 +124,30 @@ void led_blink1(void *argument);
 void StartMavlinkTask(void *argument);
 void StartGpsTask(void *argument);
 void audio(void *argument);
+void StartThermalTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+/* Hook prototypes */
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name);
+void vApplicationMallocFailedHook(void);
+
+/* USER CODE BEGIN 4 */
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name)
+{
+  (void)task;
+  (void)name;
+  /* No printf or allocation here: the task stack may already be damaged. */
+  Error_Handler();
+}
+/* USER CODE END 4 */
+
+/* USER CODE BEGIN 5 */
+void vApplicationMallocFailedHook(void)
+{
+  Error_Handler();
+}
+/* USER CODE END 5 */
 
 /**
   * @brief  FreeRTOS initialization
@@ -131,8 +167,11 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  /* CubeMX creates i2c1Mutex immediately after this user section. */
   /* USER CODE END RTOS_MUTEX */
+
+  /* Create the mutex(es) */
+  i2c1MutexHandle = osMutexNew(&i2c1Mutex_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -165,6 +204,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of audio1 */
   audio1Handle = osThreadNew(audio, NULL, &audio1_attributes);
 
+  /* creation of thermalTask */
+  thermalTaskHandle = osThreadNew(StartThermalTask, NULL, &thermalTask_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
   static const osThreadAttr_t uwb_attributes = {
       .name = "uwb_range", .stack_size = 4096, .priority = osPriorityLow
@@ -180,6 +222,8 @@ void MX_FREERTOS_Init(void) {
   configASSERT(mavlinkTaskHandle != NULL);
   configASSERT(gpsTaskHandle != NULL);
   configASSERT(audio1Handle != NULL);
+  configASSERT(thermalTaskHandle != NULL);
+  configASSERT(i2c1MutexHandle != NULL);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -401,6 +445,26 @@ void audio(void *argument)
     osDelay(20);
   }
   /* USER CODE END audio */
+}
+
+/* USER CODE BEGIN Header_StartThermalTask */
+/**
+ * @brief Thermal acquisition task; sensor driver has not been supplied yet.
+ */
+/* USER CODE END Header_StartThermalTask */
+void StartThermalTask(void *argument)
+{
+  /* USER CODE BEGIN StartThermalTask */
+  (void)argument;
+  /* Integrate camera initialization and acquisition here using hi2c1.
+   * Acquire i2c1MutexHandle around each complete I2C operation; release it
+   * before temperature calculations, frame waits, logging or display work.
+   * There is deliberately no camera traffic until its driver is imported. */
+  for (;;)
+  {
+    osDelay(1000);
+  }
+  /* USER CODE END StartThermalTask */
 }
 
 /* Private application code --------------------------------------------------*/
