@@ -123,9 +123,13 @@ int main(void)
 	    if (HAL_GetTick() - last >= 1000) {
 	        last = HAL_GetTick();
 	        const beacon_stats_t *s = beacon_twr_stats();
-	        printf("polls=%lu replies=%lu rx_err=%lu tx_err=%lu seq=%u\r\n",
+	        /*printf("polls=%lu replies=%lu rx_err=%lu tx_err=%lu seq=%u\r\n",
 	               (unsigned long)s->polls, (unsigned long)s->replies,
-	               (unsigned long)s->rx_err, (unsigned long)s->tx_err, s->last_seq);
+	               (unsigned long)s->rx_err, (unsigned long)s->tx_err, s->last_seq);*/
+	        printf("polls=%lu replies=%lu rx_err=%lu tx_err=%lu rssi=%d dBm\r\n",
+	               (unsigned long)s->polls, (unsigned long)s->replies,
+	               (unsigned long)s->rx_err, (unsigned long)s->tx_err,
+	               s->rssi_valid ? (int)(s->rssi_q8 / 256) : 0);
 	    }
   }
   /* USER CODE END 3 */

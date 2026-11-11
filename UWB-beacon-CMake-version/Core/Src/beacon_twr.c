@@ -53,15 +53,15 @@ extern const struct dwt_probe_s dw3000_probe_interf;
 /* ---- radio settings: the drone MUST use exactly the same ones ---- */
 static dwt_config_t config = {
     5,                  /* channel                                            */
-    DWT_PLEN_128,       /* preamble length (TX)                               */
-    DWT_PAC8,           /* preamble acquisition chunk (RX)                    */
+    DWT_PLEN_256,       /* preamble length (TX)                               */
+    DWT_PAC16,           /* preamble acquisition chunk (RX)                    */
     9,                  /* TX preamble code                                   */
     9,                  /* RX preamble code                                   */
-    1,                  /* SFD type: non-standard 8 symbol                    */
-    DWT_BR_6M8,         /* data rate 6.8 Mbps                                 */
+    2,                  /* SFD type: non-standard 8 symbol                    */
+    DWT_BR_850K,         /* data rate 6.8 Mbps                                 */
     DWT_PHRMODE_STD,    /* standard PHY header                                */
     DWT_PHRRATE_STD,
-    (129 + 8 - 8),      /* SFD timeout (preamble + 1 + SFD - PAC)             */
+    (257 + 16 - 16),      /* SFD timeout (preamble + 1 + SFD - PAC)             */
     DWT_STS_MODE_OFF,   /* no STS for now. Turn on together with the drone's  */
     DWT_STS_LEN_64,     /* PDoA mode later.                                   */
     DWT_PDOA_M0
@@ -69,7 +69,9 @@ static dwt_config_t config = {
 
 /* Generic DW3000 channel-5 values from Qorvo's examples. For best range and to
  * stay within regulations, use the values recommended for the DWM3220 module. */
-static dwt_txconfig_t txconfig = { 0x34, 0xfdfdfdfd, 0x0 };
+static dwt_txconfig_t txconfig = { 0x34, 0xfefefefe, 0x0 };
+
+
 
 /* Antenna delay, in chip time units. 16385 is Qorvo's default. Calibrating it
  * per board is what makes distances accurate (1 ns of error = 30 cm). */
@@ -79,7 +81,7 @@ static dwt_txconfig_t txconfig = { 0x34, 0xfdfdfdfd, 0x0 };
 /* Time between receiving the poll and sending the response, in microseconds.
  * Must be long enough for the MCU to read the poll and program the reply
  * (a few hundred us on an F103). The drone must wait longer than this for it. */
-#define POLL_RX_TO_RESP_TX_DLY_US  1500
+#define POLL_RX_TO_RESP_TX_DLY_US  2500
 #define US_TO_DWT_TIME             63898ULL     /* chip time units per microsecond */
 
 /* ---- message layout ---- */
@@ -153,6 +155,8 @@ int beacon_twr_init(void)
         return -3;
     }
     dwt_configuretxrf(&txconfig);
+    dwt_configure_rf_port(DWT_RF_PORT_MANUAL_1);
+    dwt_configciadiag(DW_CIA_DIAG_LOG_ALL);
     dwt_setrxantennadelay(RX_ANT_DLY);
     dwt_settxantennadelay(TX_ANT_DLY);
 
@@ -180,7 +184,8 @@ void beacon_twr_step(void)
     rx_armed = 0;                             /* the receiver stops after any frame/error */
 
     if (!(status & SYS_STATUS_RXFCG_BIT_MASK)) {
-    	dwt_writesysstatuslo(SYS_STATUS_RXFCG_BIT_MASK);   /* clear error flags */
+    	dwt_forcetrxoff();
+		dwt_writesysstatuslo(SYS_STATUS_ALL_RX_ERR | SYS_STATUS_ALL_RX_TO);   /* clear error flags */
         st.rx_err++;
         return;
     }
@@ -218,7 +223,6 @@ void beacon_twr_step(void)
     put_ts32(&tx_resp_msg[RESP_POLL_RX_TS_IDX], poll_rx_ts);
     put_ts32(&tx_resp_msg[RESP_RESP_TX_TS_IDX], resp_tx_ts);
     tx_resp_msg[MSG_SN_IDX] = seq;
-
     dwt_writetxdata(sizeof(tx_resp_msg), tx_resp_msg, 0);
     dwt_writetxfctrl(sizeof(tx_resp_msg), 0, 1);          /* offset 0, ranging frame */
 
@@ -239,4 +243,11 @@ void beacon_twr_step(void)
     st.replies++;
     st.last_poll_rx = (uint32_t)poll_rx_ts;
     st.last_resp_tx = (uint32_t)resp_tx_ts;
+    /* received power of the poll: read AFTER replying, so it can't delay the response */
+    {
+        dwt_cirdiags_t diagnostics;
+        st.rssi_valid =
+            (dwt_readdiagnostics_acc(&diagnostics, DWT_ACC_IDX_IP_M) == DWT_SUCCESS) &&
+            (dwt_calculate_rssi(&diagnostics, DWT_ACC_IDX_IP_M, &st.rssi_q8) == DWT_SUCCESS);
+    }
 }
