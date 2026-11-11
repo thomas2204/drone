@@ -3,7 +3,8 @@
 The drone now runs an SS-TWR initiator in its own `uwb_range` task. The protocol
 matches `UWB-beacon-CMake-version/Core/Src/beacon_twr.c`; that folder is reference
 code and is not linked into the drone firmware. The Qorvo driver was copied into
-`Drivers/UWB`, with its supplied license. No beacon source was changed.
+`Drivers/UWB`, with its supplied license. The beacon radio initializer was later
+updated with user authorization for the coordinated 1024-symbol preamble test.
 
 ## Wiring and radio
 
@@ -18,9 +19,13 @@ as open drain with no pull-up, holds reset low for 2 ms, then releases it for
 the MCU must never drive RSTn high in push-pull mode. After probing, the driver
 also performs its software reset.
 
-The current pulled F103 profile and drone use channel 5, preamble 256, PAC16,
-preamble codes 9, SFD type 2 (Qorvo 16 symbols), SFD timeout 257,
-850 kbps, standard PHR, STS off and PDoA mode 0. Both request FEFEFEFE TX power.
+The current F103 profile and drone use channel 5, preamble 1024, PAC32,
+preamble codes 9, SFD type 2 (Qorvo 16 symbols), SFD timeout 1009
+(`1024 + 1 + 16 - 32`), 850 kbps, standard PHR, STS off and PDoA mode 0.
+The drone requests FEFEFEFE TX power. The beacon requests FFFFFFFF, retaining
+the live power setting that restored ranging at approximately 6 m. Both boards
+must be flashed with the coordinated PHY profile before evaluating this change.
+This longer preamble is an acquisition test, not a guarantee of greater range.
 The poll is 12 bytes including
 hardware CRC; the response is 20 bytes, with little-endian poll-RX and response-TX
 timestamps at offsets 10 and 14. The response must echo the poll sequence number.

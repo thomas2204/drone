@@ -53,15 +53,15 @@ extern const struct dwt_probe_s dw3000_probe_interf;
 /* ---- radio settings: the drone MUST use exactly the same ones ---- */
 static dwt_config_t config = {
     5,                  /* channel                                            */
-    DWT_PLEN_256,       /* preamble length (TX)                               */
-    DWT_PAC16,           /* preamble acquisition chunk (RX)                    */
+    DWT_PLEN_1024,      /* preamble length (TX)                               */
+    DWT_PAC32,          /* preamble acquisition chunk (RX)                    */
     9,                  /* TX preamble code                                   */
     9,                  /* RX preamble code                                   */
-    2,                  /* SFD type: non-standard 8 symbol                    */
-    DWT_BR_850K,         /* data rate 6.8 Mbps                                 */
+    2,                  /* SFD type: 16 symbols                               */
+    DWT_BR_850K,         /* data rate 850 kbps                                 */
     DWT_PHRMODE_STD,    /* standard PHY header                                */
     DWT_PHRRATE_STD,
-    (257 + 16 - 16),      /* SFD timeout (preamble + 1 + SFD - PAC)             */
+    (1024 + 1 + 16 - 32), /* SFD timeout: 1009 symbols                         */
     DWT_STS_MODE_OFF,   /* no STS for now. Turn on together with the drone's  */
     DWT_STS_LEN_64,     /* PDoA mode later.                                   */
     DWT_PDOA_M0
@@ -69,7 +69,7 @@ static dwt_config_t config = {
 
 /* Generic DW3000 channel-5 values from Qorvo's examples. For best range and to
  * stay within regulations, use the values recommended for the DWM3220 module. */
-static dwt_txconfig_t txconfig = { 0x34, 0xfefefefe, 0x0 };
+static dwt_txconfig_t txconfig = { 0x34, 0xffffffff, 0x0 };
 
 
 

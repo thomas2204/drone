@@ -22,11 +22,11 @@ static const dwt_rf_port_ctrl_e rf_port = DWT_RF_PORT_MANUAL_2;
 #define UWB_RX_TIMEOUT_UUS 10000U
 #define UWB_EXCHANGE_TIMEOUT_MS 25U
 static dwt_config_t config = {
-    .chan = 5, .txPreambLength = DWT_PLEN_256, .rxPAC = DWT_PAC16,
+    .chan = 5, .txPreambLength = DWT_PLEN_1024, .rxPAC = DWT_PAC32,
     .txCode = 9, .rxCode = 9, .sfdType = 2, /* Qorvo 16-symbol SFD */
     .dataRate = DWT_BR_850K,
     .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD,
-    .sfdTO = (256 + 1 + 16 - 16),
+    .sfdTO = (1024 + 1 + 16 - 32),
     .stsMode = DWT_STS_MODE_OFF, .stsLength = DWT_STS_LEN_64,
     .pdoaMode = DWT_PDOA_M0
 };
