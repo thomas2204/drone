@@ -17,12 +17,12 @@ static UWB_RangeSnapshot shared, current;
 static uint8_t sequence;
 /* Preserve the port selected for the user's current antenna test. */
 static const dwt_rf_port_ctrl_e rf_port = DWT_RF_PORT_MANUAL_2;
-/* Match the newly pulled F103 PHY. Its response is scheduled 2500 us after
- * poll RX. Keep a 10000-UUS (~10.26 ms) receive window for the slower frames. */
-#define UWB_RX_TIMEOUT_UUS 10000U
-#define UWB_EXCHANGE_TIMEOUT_MS 25U
+/* Match the 4096-symbol F103 test profile. Its response is scheduled 8000 us
+ * after poll RX; leave a 20000-UUS (~20.51 ms) receive window. */
+#define UWB_RX_TIMEOUT_UUS 20000U
+#define UWB_EXCHANGE_TIMEOUT_MS 40U
 static dwt_config_t config = {
-    .chan = 5, .txPreambLength = DWT_PLEN_1024, .rxPAC = DWT_PAC32,
+    .chan = 5, .txPreambLength = DWT_PLEN_4096, .rxPAC = DWT_PAC32,
     .txCode = 9, .rxCode = 9, .sfdType = 2, /* Qorvo 16-symbol SFD */
     .dataRate = DWT_BR_850K,
     .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD,
@@ -78,6 +78,11 @@ static void read_config(void)
     uint32_t dtune = dwt_read_reg(DTUNE0_ID);
     current.preamble_readback = (uint16_t)((((tx_fctrl_hi & TX_FCTRL_HI_FINE_PLEN_BIT_MASK) >>
         TX_FCTRL_HI_FINE_PLEN_BIT_OFFSET) + 1U) * 8U);
+    /* 4096 is encoded through TXPSR with FINE_PLEN cleared, unlike <=2048. */
+    if ((tx_fctrl_hi & TX_FCTRL_HI_FINE_PLEN_BIT_MASK) == 0U &&
+        ((tx_fctrl & TX_FCTRL_TXPSR_BIT_MASK) >> TX_FCTRL_TXPSR_BIT_OFFSET) == 3U) {
+        current.preamble_readback = 4096U;
+    }
     current.bitrate_readback = (uint8_t)((tx_fctrl & TX_FCTRL_TXBR_BIT_MASK) >> TX_FCTRL_TXBR_BIT_OFFSET);
     current.pac_readback = (uint8_t)(dtune & DTUNE0_PRE_PAC_SYM_BIT_MASK);
     current.sfd_timeout_readback = (uint16_t)(dtune >> DTUNE0_RX_SFD_TOC_BIT_OFFSET);

@@ -53,7 +53,7 @@ extern const struct dwt_probe_s dw3000_probe_interf;
 /* ---- radio settings: the drone MUST use exactly the same ones ---- */
 static dwt_config_t config = {
     5,                  /* channel                                            */
-    DWT_PLEN_1024,      /* preamble length (TX)                               */
+    DWT_PLEN_4096,      /* preamble length (TX)                               */
     DWT_PAC32,          /* preamble acquisition chunk (RX)                    */
     9,                  /* TX preamble code                                   */
     9,                  /* RX preamble code                                   */
@@ -61,7 +61,7 @@ static dwt_config_t config = {
     DWT_BR_850K,         /* data rate 850 kbps                                 */
     DWT_PHRMODE_STD,    /* standard PHY header                                */
     DWT_PHRRATE_STD,
-    (1024 + 1 + 16 - 32), /* SFD timeout: 1009 symbols                         */
+    4097,              /* Extended SFD timeout for the long-preamble test.   */
     DWT_STS_MODE_OFF,   /* no STS for now. Turn on together with the drone's  */
     DWT_STS_LEN_64,     /* PDoA mode later.                                   */
     DWT_PDOA_M0
@@ -81,7 +81,7 @@ static dwt_txconfig_t txconfig = { 0x34, 0xffffffff, 0x0 };
 /* Time between receiving the poll and sending the response, in microseconds.
  * Must be long enough for the MCU to read the poll and program the reply
  * (a few hundred us on an F103). The drone must wait longer than this for it. */
-#define POLL_RX_TO_RESP_TX_DLY_US  2500
+#define POLL_RX_TO_RESP_TX_DLY_US  8000
 #define US_TO_DWT_TIME             63898ULL     /* chip time units per microsecond */
 
 /* ---- message layout ---- */
