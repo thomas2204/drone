@@ -18,19 +18,14 @@ static uint8_t sequence;
 /* Preserve the port selected for the user's current antenna test. */
 static const dwt_rf_port_ctrl_e rf_port = DWT_RF_PORT_MANUAL_2;
 static dwt_config_t config = {
-    .chan = 5, .txPreambLength = DWT_PLEN_128, .rxPAC = DWT_PAC8,
-    .txCode = 9, .rxCode = 9, .sfdType = 1, .dataRate = DWT_BR_6M8,
-    .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD, .sfdTO = 129,
+    .chan = 5, .txPreambLength = DWT_PLEN_256, .rxPAC = DWT_PAC16,
+    .txCode = 9, .rxCode = 9, .sfdType = 2, .dataRate = DWT_BR_850K,
+    .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD, .sfdTO = 257,
     .stsMode = DWT_STS_MODE_OFF, .stsLength = DWT_STS_LEN_64,
     .pdoaMode = DWT_PDOA_M0
 };
-static dwt_txconfig_t tx_rf = {
-    .PGdly = 0x34,
-    /* Each byte: fine gain 63 (bits 7:2), coarse gain 3 (bits 1:0).
-     * Maximum raw hardware setting; radiated output remains module-dependent. */
-    .power = 0xFFFFFFFFUL,
-    .PGcount = 0
-};
+static dwt_txconfig_t tx_rf = { 0x34, 0xfefefefe, 0 };
+
 
 static void publish(void)
 {
@@ -116,7 +111,7 @@ static int initialise(void)
     UWB_DriverFast();
     read_config();
     dwt_setrxaftertxdelay(0);
-    dwt_setrxtimeout(6000); /* UWB us (~1.026 us); beacon replies at ~1.5 ms */
+    dwt_setrxtimeout(10000); /* UWB us (~1.026 us); beacon replies at ~1.5 ms */
     return 0;
 }
 

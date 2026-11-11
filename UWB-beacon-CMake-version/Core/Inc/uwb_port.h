@@ -13,8 +13,8 @@
 
 #ifndef UWB_SPI_HANDLE
 #define UWB_SPI_HANDLE      hspi2                          /* CubeMX handle name */
-#define UWB_SPI_PRESC_SLOW  SPI_BAUDRATEPRESCALER_8        /* 36/16 = 2.25 MHz */
-#define UWB_SPI_PRESC_FAST  SPI_BAUDRATEPRESCALER_2        /* 36/2 = 18 MHz  */
+#define UWB_SPI_PRESC_SLOW  SPI_BAUDRATEPRESCALER_16        /* 36/16 = 2.25 MHz */
+#define UWB_SPI_PRESC_FAST  SPI_BAUDRATEPRESCALER_4        /* 36/2 = 18 MHz  */
 /* If you move to SPI1 (72 MHz bus): use hspi1, PRESCALER_16 (4.5) and PRESCALER_4 (18). */
 #endif
 #ifndef UWB_CS_PORT

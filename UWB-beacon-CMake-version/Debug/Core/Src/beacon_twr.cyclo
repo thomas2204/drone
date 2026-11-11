@@ -1,5 +1,5 @@
-../Core/Src/beacon_twr.c:100:17:ts_to_u64	2
-../Core/Src/beacon_twr.c:109:13:put_ts32	2
-../Core/Src/beacon_twr.c:117:23:beacon_twr_stats	1
-../Core/Src/beacon_twr.c:120:5:beacon_twr_init	5
-../Core/Src/beacon_twr.c:165:6:beacon_twr_step	10
+../Core/Src/beacon_twr.c:103:17:ts_to_u64	2
+../Core/Src/beacon_twr.c:112:13:put_ts32	2
+../Core/Src/beacon_twr.c:120:23:beacon_twr_stats	1
+../Core/Src/beacon_twr.c:123:5:beacon_twr_init	5
+../Core/Src/beacon_twr.c:170:6:beacon_twr_step	12
