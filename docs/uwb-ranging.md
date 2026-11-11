@@ -52,6 +52,40 @@ off before moving the antenna and compare at the same position/orientation.
 Getting replies at approximately one metre does not alone identify the active
 connector, because the inactive RF path can still couple some signal.
 
+`UWB CFG` contains real register readbacks, refreshed once per second by the
+UWB task. `ok=1` checks transmit power, channel, TX/RX preamble codes, SFD type
+and the manual RF-port selector. It does not verify radiated power or antennas.
+`UWB RSSIraw` prints channel-impulse-response power C, accumulated preamble
+symbols N and receiver gain decision D for an independent RSSI calculation:
+`10*log10(C*2^21/N^2) + 6*D - 121.7` for the current PRF64 Ipatov settings.
+
+The driver's `ull_calculate_rssi` had a bit-extraction precedence bug. It now
+uses the existing `ull_getrxcode` helper. For CHAN_CTRL=0x094A the old code
+extracted 10 rather than 9; both select PRF64, so that bug did not change RSSI
+for the current profile. The fixed-point RSSI calculation passed 116 test
+vectors against an independent double-precision log10 reference.
+
+Live-board readback on November 10, after flashing and verifying the diagnostic
+build, showed ID DECA0312, TX_POWER FDFDFDFD, CHAN_CTRL 0000094A and
+RF_SWITCH_CTRL 1C002100 (manual RF2), with configuration verification passing.
+An initial sample had 61 transmissions, 61 valid ranges, no timeouts/errors,
+distance 474 mm, C=12, N=108, D=0, RSSI approximately -88.4 dBm. This is a
+close-range test; it does not establish acceptable operating range.
+
+With the user confirming a fixed 1.5 m separation, the RF2 trial had 188
+confirmed transmissions and no accepted replies (188 timeouts). The subsequent
+RF1 trial had 181 confirmed transmissions and no replies (181 timeouts).
+RF2 was restored and verified as RF_SWITCH_CTRL=1C002100. No transmit-power or
+PHY changes were made. The RSSI shown during these no-frame intervals is stale,
+not a new signal measurement. Before this controlled trial, a different
+sample captured status 01810FF3, including RXFSL (frame-sync loss), with
+CRC-valid replies on other attempts and no software range rejections.
+
+These tests do not locate the failing direction. The F103 poll/reply/error
+counters at close range and at 1.5 m are needed to distinguish missed outbound
+polls from missing/corrupted inbound replies. A transmit-complete event confirms
+the radio sequencer ran; it does not measure power radiated by the antenna.
+
 `UWB NO RANGE` reports polls, successful ranges (RX), timeouts (TO), radio errors
 (ERR), and rejected responses (BAD). `UWB init=-1` means probe failed; `-2` means
 IDLE_RC timed out; `-3` means driver initialization failed; `-4` means radio
@@ -98,3 +132,32 @@ the firmware. The DW3000 datasheet in
 active-low reset driven only by an external open-drain output. The original
 startup never released the CubeMX PC1-low state. Live SPI reads completed
 without HAL errors but returned device ID 0x00000000 while reset was held.
+
+## Maximum TX-power test
+
+On November 11 the drone's requested TX_POWER was changed from FDFDFDFD to
+FFFFFFFF at the user's request. Each 0xFF byte encodes fine gain 63 and coarse
+gain 3, applied to all four packet sections. PGdly stays 0x34 and PGcount stays
+zero; channel, preamble, bitrate, packet format and RF2 selection stay the same.
+The existing `UWB CFG` readback check automatically expects PWR=FFFFFFFF now.
+
+This is the maximum raw gain-register setting, not a calibrated radiated-power
+level. Final antenna/module output and compliance require RF measurement.
+The former FD byte already used fine gain 63 and coarse gain 1. Qorvo's driver
+gain table estimates about 1.8 dB more from coarse 1 to 3, so this setting alone
+does not explain or promise a large improvement from the observed one-metre link.
+
+The supplied F103 reference folder was not changed. To raise reply power too,
+the beacon owner can set the power field of their working code to:
+
+```c
+static dwt_txconfig_t txconfig = { 0x34, 0xFFFFFFFFUL, 0 };
+```
+
+Both boards need the respective firmware flashed. A transmit-power change does
+not require changing the peer's channel/bitrate settings. Increasing just the
+drone's power helps the poll direction, not the beacon's reply power.
+
+Encoding/gain reference: Qorvo's `dw3000_txpower_adjustment.c` in Google's UWB
+driver tree, commit 713ccd47900ecb22590e580f9407a5c9479b3062, and DW3000
+datasheet section 3.11.2.

@@ -12,6 +12,11 @@ typedef struct {
     int16_t rssi_q8;          /* Most recent received channel power, Q8.8 dBm. */
     bool rssi_valid;
     uint8_t rf_port;
+    uint32_t tx_power_readback, chan_readback, rf_switch_readback;
+    uint32_t cir_power;
+    uint16_t accumulation_count;
+    uint8_t dgc_decision;
+    bool config_verified;
     uint32_t last_update_ms;
     int32_t distance_mm;
     bool valid;               /* latest attempt succeeded; also check sample age */

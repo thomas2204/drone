@@ -10,5 +10,9 @@ if ($LASTEXITCODE -ne 0) { throw 'UWB tests failed' }
 if ($LASTEXITCODE -ne 0) { throw 'UWB startup test compilation failed' }
 & "$output/uwb_startup_test.exe"
 if ($LASTEXITCODE -ne 0) { throw 'UWB startup tests failed' }
+& gcc -std=c11 -Wall -Wextra -Werror "-I$root/Drivers/UWB" "-I$root/Drivers/UWB/lib/qmath/include" "$root/Drivers/UWB/deca_rsl.c" "$root/Drivers/UWB/lib/qmath/src/qmath.c" "$PSScriptRoot/uwb_rssi_test.c" -lm -o "$output/uwb_rssi_test.exe"
+if ($LASTEXITCODE -ne 0) { throw 'UWB RSSI test compilation failed' }
+& "$output/uwb_rssi_test.exe"
+if ($LASTEXITCODE -ne 0) { throw 'UWB RSSI tests failed' }
 
 

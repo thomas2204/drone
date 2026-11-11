@@ -24,7 +24,13 @@ static dwt_config_t config = {
     .stsMode = DWT_STS_MODE_OFF, .stsLength = DWT_STS_LEN_64,
     .pdoaMode = DWT_PDOA_M0
 };
-static dwt_txconfig_t tx_rf = { 0x34, 0xfdfdfdfd, 0 };
+static dwt_txconfig_t tx_rf = {
+    .PGdly = 0x34,
+    /* Each byte: fine gain 63 (bits 7:2), coarse gain 3 (bits 1:0).
+     * Maximum raw hardware setting; radiated output remains module-dependent. */
+    .power = 0xFFFFFFFFUL,
+    .PGcount = 0
+};
 
 static void publish(void)
 {
@@ -59,6 +65,25 @@ bool UWB_RangeGetSnapshot(UWB_RangeSnapshot *out)
     return true;
 }
 
+/* Called only by the UWB task: never access SPI from the Bluetooth task. */
+static void read_config(void)
+{
+    current.tx_power_readback = dwt_read_reg(TX_POWER_ID);
+    current.chan_readback = dwt_read_reg(CHAN_CTRL_ID);
+    current.rf_switch_readback = dwt_read_reg(RF_SWITCH_CTRL_ID);
+    const uint32_t chan_mask = CHAN_CTRL_RX_PCODE_BIT_MASK |
+        CHAN_CTRL_TX_PCODE_BIT_MASK | CHAN_CTRL_SFD_TYPE_BIT_MASK | CHAN_CTRL_RF_CHAN_BIT_MASK;
+    const uint32_t expected_chan = ((uint32_t)config.rxCode << CHAN_CTRL_RX_PCODE_BIT_OFFSET) |
+        ((uint32_t)config.txCode << CHAN_CTRL_TX_PCODE_BIT_OFFSET) |
+        ((uint32_t)config.sfdType << CHAN_CTRL_SFD_TYPE_BIT_OFFSET) | (config.chan == 9);
+    const uint32_t rf_mask = RF_SWITCH_CTRL_ANTSWEN_BIT_MASK | RF_SWITCH_CTRL_ANTSWCTRL_BIT_MASK;
+    const uint32_t expected_rf = RF_SWITCH_CTRL_ANTSWEN_BIT_MASK |
+        ((uint32_t)rf_port << RF_SWITCH_CTRL_ANTSWCTRL_BIT_OFFSET);
+    current.config_verified = current.tx_power_readback == tx_rf.power &&
+        (current.chan_readback & chan_mask) == expected_chan &&
+        (current.rf_switch_readback & rf_mask) == expected_rf;
+}
+
 static int initialise(void)
 {
     current.init_result = 2; /* probing hardware */
@@ -89,6 +114,7 @@ static int initialise(void)
     dwt_setrxantennadelay(16385);
     dwt_settxantennadelay(16385);
     UWB_DriverFast();
+    read_config();
     dwt_setrxaftertxdelay(0);
     dwt_setrxtimeout(6000); /* UWB us (~1.026 us); beacon replies at ~1.5 ms */
     return 0;
@@ -137,6 +163,14 @@ static void range_once(void)
     current.rssi_valid =
         dwt_readdiagnostics_acc(&diagnostics, DWT_ACC_IDX_IP_M) == DWT_SUCCESS &&
         dwt_calculate_rssi(&diagnostics, DWT_ACC_IDX_IP_M, &current.rssi_q8) == DWT_SUCCESS;
+    if (current.rssi_valid) {
+        current.cir_power = diagnostics.power;
+        current.accumulation_count = diagnostics.accumCount;
+        current.dgc_decision = dwt_get_dgcdecision();
+        /* The driver returns SUCCESS even for its invalid-value sentinel. */
+        current.rssi_valid = diagnostics.power != 0U && diagnostics.accumCount != 0U &&
+            current.rssi_q8 != INT16_MIN;
+    }
     uint8_t reply[20];
     if ((dwt_read_reg(RX_FINFO_ID) & 0x3ffU) != sizeof reply) {
         current.rejected++;
@@ -166,8 +200,13 @@ void UWB_RangeTask(void *argument)
         /* Keep the failure visible, and leave all other application tasks running. */
         for (;;) osDelay(1000);
     }
+    uint32_t last_config_ms = HAL_GetTick();
     for (;;) {
         range_once();
+        if ((uint32_t)(HAL_GetTick() - last_config_ms) >= 1000U) {
+            read_config();
+            last_config_ms = HAL_GetTick();
+        }
         publish();
         osDelay(100);
     }

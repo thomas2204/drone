@@ -310,6 +310,18 @@ void BLUETOOTH(void *argument)
                         (unsigned)uwb.rf_port, (unsigned long)uwb.frames);
                 if (length > 0 && (size_t)length < sizeof(buffer))
                     HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                length = snprintf(buffer, sizeof(buffer), "UWB CFG ok=%u PWR=%08lx CH=%08lx RFREG=%08lx\r\n",
+                    (unsigned)uwb.config_verified, (unsigned long)uwb.tx_power_readback,
+                    (unsigned long)uwb.chan_readback, (unsigned long)uwb.rf_switch_readback);
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                if (uwb.rssi_valid) {
+                    length = snprintf(buffer, sizeof(buffer), "UWB RSSIraw C=%lu N=%u D=%u\r\n",
+                        (unsigned long)uwb.cir_power, (unsigned)uwb.accumulation_count,
+                        (unsigned)uwb.dgc_decision);
+                    if (length > 0 && (size_t)length < sizeof(buffer))
+                        HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+                }
             }
         }
 
