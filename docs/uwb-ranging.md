@@ -51,6 +51,33 @@ TX/RX rates, raw NMEA and error statistics are hidden. Missing or stale data
 uses a short status message. Internal diagnostics remain in `UWB_RangeSnapshot`
 for debugger/API access; the diagnostic line formats described below refer to
 the earlier verbose Bluetooth build, not the current display.
+The snapshot's `clock_offset_raw` captures the most recent protocol-sized radio
+frame's clock-offset measurement. Convert to relative ppm with
+`clock_offset_raw * 1000000.0 / 67108864.0`. This is the same measurement used
+for SS-TWR clock correction. No additional Bluetooth output is enabled.
+
+### Live relative crystal-offset test, November 11
+
+The flashed .text contents were read back and matched byte-for-byte against
+the local diagnostic ELF before interpreting the snapshot layout. No firmware
+or radio settings were changed during this measurement.
+
+- Close range, reported distance 0.66-0.69 m: five fresh samples, raw offsets
+  -10 to -14, equivalent to -0.149 to -0.209 ppm (mean -0.179 ppm).
+  Between the first and last samples: 81 accepted ranges / 82 exchanges.
+- User-confirmed physical distance approximately 3 m: four fresh samples,
+  raw offsets -6 to -24, equivalent to -0.089 to -0.358 ppm (mean -0.197 ppm).
+  Between the first and last samples: 57 accepted ranges / 61 exchanges.
+  The uncalibrated reported distance was 2.64-2.74 m; that bias is separate
+  from this relative clock-offset test.
+- All sampled range timestamps were under 100 ms old. Measurements describe
+  successfully received frames, not frequency offset during lost packets.
+
+There is no evidence of a large or unstable relative crystal offset in these
+samples. Crystal trim should not be changed on the basis of these readings.
+This does not measure absolute oscillator accuracy and does not establish
+the cause of the remaining packet loss or the maximum reliable range.
+Raw test logs and JSON summaries are under build/uwb-crystal-*.
 
 The radio uses the `rf_port` selection in `Core/Src/uwb_range.c` (currently
 manual RF2, preserving the user's port test). The Bluetooth `RF` field is taken

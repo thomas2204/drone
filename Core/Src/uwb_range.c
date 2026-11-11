@@ -192,8 +192,9 @@ static void range_once(void)
     dwt_readrxdata(reply, sizeof reply, 0);
     uint32_t tx = dwt_readtxtimestamplo32();
     uint32_t rx = dwt_readrxtimestamplo32(IPATOV);
+    current.clock_offset_raw = dwt_readclockoffset(); //debug shut
     if (!UWB_DecodeRange(reply, sizeof reply, poll[2], tx, rx,
-                         dwt_readclockoffset(), &current.distance_mm)) {
+                         current.clock_offset_raw, &current.distance_mm)) {
         current.rejected++;
         return;
     }

@@ -18,6 +18,7 @@ typedef struct {
     uint32_t cir_power;
     uint16_t accumulation_count;
     uint8_t dgc_decision;
+    int16_t clock_offset_raw; /* Relative clock offset: raw / 2^26; last accepted radio frame., debug shit*/
     bool config_verified;
     uint32_t last_update_ms;
     int32_t distance_mm;
