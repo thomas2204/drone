@@ -26,7 +26,7 @@ static dwt_config_t config = {
     .txCode = 9, .rxCode = 9, .sfdType = 2, /* Qorvo 16-symbol SFD */
     .dataRate = DWT_BR_850K,
     .phrMode = DWT_PHRMODE_STD, .phrRate = DWT_PHRRATE_STD,
-    .sfdTO = (1024 + 1 + 16 - 32),
+    .sfdTO = 4097, /* Extended receiver SFD wait for the outdoor range test. */
     .stsMode = DWT_STS_MODE_OFF, .stsLength = DWT_STS_LEN_64,
     .pdoaMode = DWT_PDOA_M0
 };
