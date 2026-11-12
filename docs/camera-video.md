@@ -1,5 +1,14 @@
 # H743 camera recording
 
+The pulled MLX90640 implementation is now integrated too; see
+[thermal integration](thermal-integration.md) for shared-bus timing, SD
+coordination and memory placement. With both cameras running, the final
+board test saved VIDEO003.MP4 (40 frames over 11639 ms, all 345129 sample
+bytes verified) and T0007.AVI (35 thermal frames, successful close).
+Startup audio completed and GPS kept receiving. Evidence:
+build/thermal-merge-final-result.txt. The active pinned image is now
+build/drone-thermal-camera-merged.elf.
+
 ## Integrated application
 
 The normal Debug build now includes the working H.264 MP4 recorder alongside

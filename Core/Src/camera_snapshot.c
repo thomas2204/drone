@@ -72,6 +72,14 @@ static bool Register(uint8_t reg, uint8_t *value, bool read)
     camera_snapshot.failed_reg = reg;
     if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK)
         return Fail(CAMERA_I2C);
+    /* Preserve the thermal camera's CubeMX 400 kHz bus configuration. Only
+     * this STOP-delimited SCCB transaction uses the proven 100 kHz timing. */
+    uint32_t saved_timing = hi2c1.Instance->TIMINGR;
+    if (!camera_snapshot.software_sccb) {
+        __HAL_I2C_DISABLE(&hi2c1);
+        hi2c1.Instance->TIMINGR = 0x20B182BE;
+        __HAL_I2C_ENABLE(&hi2c1);
+    }
     /* SCCB register selection and read use separate STOP-delimited transfers.
      * Writes are one uninterrupted register/value transfer, avoiding a
      * memory-write RELOAD pause between the two bytes. */
@@ -99,6 +107,11 @@ static bool Register(uint8_t reg, uint8_t *value, bool read)
         camera_snapshot.trace[index][4] = camera_snapshot.i2c_error;
         camera_snapshot.trace[index][5] = (GPIOB->IDR >> 8) & 3U;
         camera_snapshot.trace_count = index + 1U;
+    }
+    if (!camera_snapshot.software_sccb) {
+        __HAL_I2C_DISABLE(&hi2c1);
+        hi2c1.Instance->TIMINGR = saved_timing;
+        __HAL_I2C_ENABLE(&hi2c1);
     }
     (void)osMutexRelease(i2c1MutexHandle);
     if (status == HAL_OK && !read) DelayMs(1);
@@ -407,8 +420,8 @@ static bool ProbeDCMIInput(void)
 static bool InitSensor(void)
 {
     camera_snapshot.stage = CAMERA_SENSOR;
-    /* Conservative SCCB timing for module bring-up. This is isolated from
-     * the normal application's 400 kHz I2C1 configuration. */
+    /* Bus reconfiguration is restricted to the isolated diagnostic build. */
+#if BOARD_CAMERA_TEST
     if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK) return Fail(CAMERA_I2C);
     HAL_StatusTypeDef bus_status = HAL_I2C_DeInit(&hi2c1);
     if (bus_status == HAL_OK) {
@@ -423,6 +436,9 @@ static bool InitSensor(void)
     camera_snapshot.hal_status = bus_status;
     (void)osMutexRelease(i2c1MutexHandle);
     if (bus_status != HAL_OK) return Fail(CAMERA_I2C);
+#else
+    if (camera_snapshot.software_sccb) return Fail(CAMERA_I2C);
+#endif
     HAL_GPIO_WritePin(CAM_PWDN_GPIO_Port, CAM_PWDN_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(CAM_RESET_N_GPIO_Port, CAM_RESET_N_Pin, GPIO_PIN_RESET);
     DelayMs(10);

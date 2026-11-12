@@ -26,6 +26,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "thermal_test.h"
 #include "mk_app.h"
 #include "gps_raw.h"
 #include "usart.h"
@@ -63,6 +64,13 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+#if APP_CAMERA_ENABLED
+/* The encoder uses stack scratch heavily. Keep its stack in fast DTCM even
+ * though the enlarged shared RTOS heap lives in D2 SRAM. */
+static uint64_t camera_task_stack[16384 / sizeof(uint64_t)];
+static StaticTask_t camera_task_control;
+#endif
+
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -112,7 +120,7 @@ osThreadId_t thermalTaskHandle;
 const osThreadAttr_t thermalTask_attributes = {
   .name = "thermalTask",
   .stack_size = 2048 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for i2c1Mutex */
 osMutexId_t i2c1MutexHandle;
@@ -167,7 +175,10 @@ void MX_FREERTOS_Init(void) {
   if (!AppStorage_Init() || !AppLog_Init()) Error_Handler();
 #if BOARD_CAMERA_TEST
   static const osThreadAttr_t camera_attributes = {
-      .name = "camera_test", .stack_size = 16384, .priority = osPriorityNormal
+      .name = "camera_test", .stack_mem = camera_task_stack,
+      .stack_size = sizeof(camera_task_stack),
+      .cb_mem = &camera_task_control, .cb_size = sizeof(camera_task_control),
+      .priority = osPriorityNormal
   };
   i2c1MutexHandle = osMutexNew(&i2c1Mutex_attributes);
   if (i2c1MutexHandle == NULL ||
@@ -237,7 +248,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
 #if APP_CAMERA_ENABLED
   static const osThreadAttr_t recorder_attributes = {
-      .name="camera_record", .stack_size=16384, .priority=osPriorityLow
+      .name="camera_record", .stack_mem=camera_task_stack,
+      .stack_size=sizeof(camera_task_stack),
+      .cb_mem=&camera_task_control, .cb_size=sizeof(camera_task_control),
+      .priority=osPriorityLow
   };
   configASSERT(osThreadNew(CameraSnapshot_Task,NULL,&recorder_attributes)!=NULL);
 #endif
@@ -544,11 +558,9 @@ void StartThermalTask(void *argument)
   /* Integrate camera initialization and acquisition here using hi2c1.
    * Acquire i2c1MutexHandle around each complete I2C operation; release it
    * before temperature calculations, frame waits, logging or display work.
-   * There is deliberately no camera traffic until its driver is imported. */
-  for (;;)
-  {
-    osDelay(1000);
-  }
+   * OV2640 SCCB and MLX90640 register operations share this mutex. */
+  thermal_test_run();
+  
   /* USER CODE END StartThermalTask */
 }
 

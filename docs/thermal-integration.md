@@ -1,81 +1,84 @@
-# Thermal camera configuration and task scaffold
+# Combined thermal and OV2640 firmware
 
-The reference is `H743_DEV_BOARD_TEST.ioc` supplied on 2026-11-12.
-Only its thermal I2C configuration and relevant FreeRTOS settings are applied.
-The reference does not contain the sensor driver or acquisition code.
+The pulled MLX90640 implementation is now built into the normal application.
+Its sensor calibration and temperature calculations, refresh setting 0x04,
+emissivity 0.95, Ta shift 8 C, iron-bow palette, bilinear 320x240 output and
+30-second clips every 120 seconds are retained. The initial snapshot and
+60-frame thermal recording are also retained. Existing thermal AVI files
+are not overwritten; subsequent clips use T0001.AVI, T0002.AVI, etc.
+The AVI format is retained from the imported code; Windows Media Player
+compatibility of thermal AVI has not been established. OV2640 uses the
+previously playback-confirmed H.264 MP4 format.
 
-## Clock and I2C
+## Clock and peripheral configuration
 
-Actual wiring clarified on 2026-11-12: the user's MLX90640 and OV2640 both
-share I2C1 PB8/PB9. The schematic's PH4/PH5 heat-camera test-point labels refer
-to I2C2, but are not the actual connection reported by the user. Keep this
-thermal scaffold on `hi2c1` and the shared I2C1 mutex. MLX90640 normally uses
-7-bit address 0x33; OV2640 uses 0x30. Confirm the actual addresses when both
-are connected. The thermal acquisition driver remains unimplemented.
+The pulled clock tree is preserved: HSI 64 MHz, PLL1 M=4/N=50/P=2/Q=4/R=2,
+SYSCLK 400 MHz, AHB 200 MHz, all APB buses 100 MHz. PLL2 remains
+M=4/N=10/P=2/Q=2/R=2 for ADC. PLL3 remains
+M=4/N=12/P=4/Q=4/R=8/FRACN=2359 for audio. I2C123 uses D2PCLK1
+100 MHz. SDMMC uses PLL1Q 200 MHz with ClockDiv=4. Pins, DMA stream
+assignments and DCMI active-low VSYNC are retained.
 
-`projects.ioc` now describes the existing firmware clock configuration:
-HSI 64 MHz, PLL1 M=4 / N=50 / P=2 / Q=4 / R=2, wide VCO,
-SYSCLK 400 MHz, AHB 200 MHz, and all APB buses 100 MHz.
-The reference instead uses HSE with M=5 / N=160. Keeping HSI avoids changing
-the shared PLL input used by this project's ADC and audio PLLs. PLL2, PLL3,
-USB HSI48, pin assignments, and peripheral selections are preserved.
+Both cameras physically share I2C1 PB8/PB9: MLX90640 7-bit address 0x33,
+OV2640 0x30. The thermal bus configuration 0x009034B6 (400 kHz target)
+remains in i2c.c and projects.ioc. Each OV2640 SCCB transaction takes the
+shared mutex, temporarily selects the proven 100 kHz timing 0x20B182BE,
+and restores the previous TIMINGR before releasing it. Normal camera
+startup no longer deinitializes the shared bus. Thermal reads, writes and
+address probes also take the mutex. Sensor-ready polling yields with the
+bus released; temperature calculations are outside bus ownership.
 
-I2C1 on PB8/PB9 uses the reference's I2C3 Fast-mode timing `0x009034B6`
-with a 100 MHz peripheral kernel clock. The source already had this value;
-the CubeMX file was stale. The reference's default rise/fall inputs replace
-the old I2C1 Standard-mode overrides. Confirm the actual bus waveform on
-hardware, including external pull-ups and the added module's capacitance.
-I2C2 and I2C3 timing entries are synchronized to their existing source
-values for the same 100 MHz kernel clock; neither bus changes in firmware.
+Two configuration exceptions are necessary to preserve working DMA:
+I-cache stays enabled and D-cache disabled, matching main.c and the IOC.
+The imported IOC had the opposite cache selections despite unchanged
+startup code. Ordinary globals and the CPU stack stay in DTCM; only the
+actual DMA buffers/file objects are placed in DMA-accessible SRAM. Moving
+all globals into AXI SRAM would overflow it alongside the MP4 recorder.
 
-## FreeRTOS
+## Storage and memory
 
-- Existing tasks are retained. `thermalTask` calls `StartThermalTask`, at
-  AboveNormal priority with 2048 words (8192 bytes) of stack, matching the
-  thermal task allocation in the reference. It currently only sleeps.
-- FreeRTOS heap is 65536 bytes. Stack overflow checking (mode 2) and allocation
-  failure hooks are enabled as in the reference. Per-task newlib reentrancy
-  remains disabled, preserving the original project's C-library configuration;
-  the thermal task and I2C mutex do not require it.
-  The failure hooks stop through `Error_Handler` without logging or allocation.
-- `i2c1MutexHandle`, declared in `i2c.h`, is created before the scheduler starts.
-  All future task-level users of `hi2c1` must use it; declaring a mutex alone
-  does not protect drivers that access the handle directly.
+All three SD users (audio, thermal, OV2640) use AppStorage rather than
+remounting separate FATFS objects. Separate file objects are AXI-resident.
+FatFs reentrancy remains enabled; file lock capacity is increased from 2 to
+4 in both ffconf.h and the IOC. Camera completion cannot unmount an open
+thermal/audio file. Thermal writes pass through an aligned AXI bounce
+buffer and split at partial sector boundaries for SDMMC IDMA.
 
-For a blocking HAL transaction, acquire the mutex, check acquisition succeeded,
-perform the complete register-read/write sequence, then release on every exit
-path. For DMA/interrupt transfers, the owning task must wait for completion
-before releasing it; an ISR can signal completion but cannot release a mutex.
-Keep frame-ready polling delays, temperature calculations, display and filesystem
-work outside bus ownership. A CMSIS mutex timeout is in RTOS ticks.
+Thermal AVI renders bottom-up rows and streams them directly to the file,
+preserving image content without allocating another 230400-byte framebuffer.
+Failed partial frames are truncated before the AVI index is finalized.
+The pulled 98304-byte RTOS heap is preserved and placed in D2 SRAM. The
+16 KiB MP4 encoder task stack/control block are statically allocated in
+fast DTCM. Thermal remains at the pulled Low task priority, matching the
+IOC; audio remains Normal to protect refills. Video encoding and thermal
+math/rendering compile with optimization even in Debug. External SDRAM is
+not required by either recorder.
 
-No display or logger tasks, USART configuration, JPEG support, or FatFs options
-are copied. The existing SD/audio filesystem setup stays in place.
-
-## Remaining integration and hardware checks
-
-Provide the working thermal project's sensor driver and acquisition functions
-to replace the placeholder in `StartThermalTask`. Its platform I2C layer must
-use `hi2c1` and the shared mutex, without reinitializing I2C or system clocks.
-Check whether the driver expects a 7-bit address or HAL's shifted address.
-
-Before using the camera, confirm all devices on I2C1 support 400 kHz, have
-distinct addresses, and use compatible bus voltage levels. Measure SCL and
-rise time, then verify frame acquisition while GPS, MAVLink, UWB, LEDs and
-audio run. The source already ran at 400 MHz, so this update does not establish
-that SDRAM timings or other existing peripheral settings have been hardware
-validated. No firmware has been flashed as part of this change.
+Thermal logs share the Bluetooth transmit mutex with existing application
+and camera messages. They do not call an undefined weak __io_putchar.
+`thermal_report` exposes initialization, read/clip errors, temperatures,
+frame counts and the latest completed numbered clip to the debugger.
 
 ## Validation
 
-`cmake --build --preset Debug` succeeds. The enlarged FreeRTOS heap fits in
-the 128 KB DTCM region. This confirms link-time capacity, not runtime stack
-headroom.
+Build the combined image with `cmake --preset Debug` and
+`cmake --build build/Debug`. Release and camera-only builds are checked too.
+`python tests/test_thermal_avi.py` checks the actual renderer/writer using
+host file I/O: AVI size/index, orientation, aligned sector-safe writes,
+existing-file protection and partial-write recovery.
 
-CubeMX 6.18.1 loaded and saved an isolated copy, retaining the clock, I2C,
-thermal task and mutex entries. Full generation did not finish: CubeMX
-reported `IP not ready for code generation: FATFS`. The validation copy and
-logs are under `build/thermal-cubemx-check`; generated output was not applied
-to the working project. Review the FatFs configuration in CubeMX before
-regenerating the complete project. No manual regeneration is needed to build
-the source changes delivered here.
+Hardware results are recorded under build/thermal-merge-*-result.txt.
+Both sensors have produced frames concurrently; MP4 samples passed embedded
+SD readback, thermal clips closed successfully, startup audio reached
+AUDIO_DONE and GPS continued receiving PVT messages. CPU clock was read as
+400000000 and the restored I2C1 TIMINGR as 0x009034B6. These are functional
+checks, not oscilloscope measurements of I2C rise time.
+
+Final combined Debug hardware test: VIDEO003.MP4, 40 frames over 11639 ms,
+345129 encoded sample bytes verified; T0007.AVI, 35 thermal frames,
+no read/storage errors. Audio played 231075 frames; GPS PVT count reached
+249. All 11 tasks remained present with 71672 RTOS heap bytes free.
+Final link use: DTCM 61712/131072 bytes, AXI 496960/524288 bytes,
+D2 288288/294912 bytes. AXI and D2 are near capacity; additional DMA
+buffers require a memory placement review. The clock/IOC comparison is
+saved in build/thermal-merge-config-audit.json.

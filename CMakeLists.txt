@@ -71,6 +71,13 @@ if(BOARD_CAMERA_TEST OR (CAMERA_RECORDING AND NOT BOARD_BENCH_TEST))
 endif()
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE APP_CAMERA_ENABLED=$<BOOL:${APP_CAMERA_ENABLED}>)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/app_storage.c Core/Src/app_log.c)
+if(NOT BOARD_CAMERA_TEST AND NOT BOARD_BENCH_TEST)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        Core/Src/MLX90640_API.c Core/Src/MLX90640_I2C_Driver.c
+        Core/Src/thermal_test.c Core/Src/thermal_avi.c Core/Src/thermal_palette.c)
+    set_source_files_properties(Core/Src/MLX90640_API.c Core/Src/thermal_avi.c
+        Core/Src/thermal_palette.c PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
 if(APP_CAMERA_ENABLED)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         Core/Src/camera_snapshot.c Core/Src/camera_jpeg.c Core/Src/camera_sccb.c
@@ -91,7 +98,7 @@ endif()
 set(APP_DMA_LINKER_SCRIPT "${CMAKE_SOURCE_DIR}/linker/dma_sections.ld")
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-T${APP_DMA_LINKER_SCRIPT}")
 set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY
-    LINK_DEPENDS "${APP_DMA_LINKER_SCRIPT}")
+    LINK_DEPENDS "${APP_DMA_LINKER_SCRIPT}" "${CMAKE_SOURCE_DIR}/STM32H743xx_FLASH.ld")
 
 # ==========================================
 # Custom MAVLink application

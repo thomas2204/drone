@@ -1,6 +1,12 @@
 #include "app_storage.h"
 #include "cmsis_os2.h"
 #include "sdmmc.h"
+#include "FreeRTOS.h"
+
+/* Keep the imported 96 KiB RTOS heap away from AXI camera/SD buffers and
+ * DTCM thermal calculations. Startup initializes heap metadata on first use. */
+uint8_t ucHeap[configTOTAL_HEAP_SIZE]
+    __attribute__((section(".dma_buffer.rtos_heap"), aligned(32)));
 
 static osMutexId_t volume_mutex;
 volatile uint32_t app_storage_open_files;
