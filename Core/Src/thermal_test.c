@@ -38,6 +38,16 @@ static float          To[768];
 static float          Ta;
 static uint32_t	 	  clip_no;
 volatile ThermalReport thermal_report;
+static FIL fil __attribute__((section(".sd_dma_buffer"), aligned(32)));
+static char           line[32 * 8 + 8];
+
+static const char *f1(float v, char *b)
+{
+    int t = (int)lroundf(v * 10.0f);
+    int a = (t < 0) ? -t : t;
+    snprintf(b, 12, "%s%d.%d", (t < 0) ? "-" : "", a / 10, a % 10);
+    return b;
+}
 
 static int ThermalLog(const char *format, ...)
 {
@@ -137,6 +147,30 @@ static int read_frame(void)
     return 0;
 }
 
+static void write_snapshot(void)
+{
+    UINT bw;
+
+    if (AppStorage_Open(&fil, "SNAP.CSV", FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+        printf("SD: cannot create SNAP.CSV\r\n");
+        return;
+    }
+    for (int r = 0; r < 24; r++) {
+        int n = 0;
+        for (int c = 0; c < 32; c++) {
+            char b[12];
+            n += snprintf(line + n, sizeof(line) - n, "%s%c",
+                          f1(To[r * 32 + c], b), (c == 31) ? '\n' : ',');
+        }
+        if (f_write(&fil, line, (UINT)n, &bw) != FR_OK || bw != (UINT)n) {
+            printf("SD: write error in SNAP.CSV\r\n");
+            break;
+        }
+    }
+    AppStorage_Close(&fil);
+    printf("SD: wrote SNAP.CSV\r\n");
+}
+
 static void next_name(char *name)
 {
     do {
@@ -183,6 +217,7 @@ void thermal_test_run(void)
     while ((thermal_report.init_result=mlx_init())!=0) osDelay(2000);
     for (int i=0;i<4;i++) read_frame();
     thermal_report.ready=1;
+    write_snapshot();
     printf("THERMAL: ready; send record for a 10-second clip\r\n");
     for (;;) {
         if (RecordControl_TakeRequest(RECORD_THERMAL)) {
