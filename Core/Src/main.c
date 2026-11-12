@@ -35,6 +35,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#if BOARD_BENCH_TEST
+#include "board_bench.h"
+#endif
 
 /* USER CODE END Includes */
 
@@ -97,7 +100,9 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+#if BOARD_BENCH_TEST
+  BoardBench_ConfigureMPU();
+#endif
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -116,7 +121,9 @@ __HAL_RCC_D2SRAM1_CLK_ENABLE();
   MX_I2C2_Init();
   MX_SPI5_Init();
   MX_SPI6_Init();
+#if !BOARD_BENCH_TEST && !APP_CAMERA_ENABLED
   MX_SDMMC1_SD_Init();
+#endif
   MX_SAI2_Init();
   MX_ADC1_Init();
   MX_TIM1_Init();

@@ -8,6 +8,14 @@
 #define GPS_UBX_PVT_SIZE 92U
 #define GPS_UBX_WEEK_MS 604800000U
 
+/* 0 preserves receiver signal settings; 1/2 are explicit RAM-only BDS tests. */
+#ifndef GPS_BDS_TEST_PROFILE
+#define GPS_BDS_TEST_PROFILE 0
+#endif
+#ifndef GPS_MEASUREMENT_PERIOD_MS
+#define GPS_MEASUREMENT_PERIOD_MS 100
+#endif
+
 typedef struct
 {
     uint32_t tow_ms;
@@ -68,6 +76,10 @@ bool GPS_UbxDecodePvt(const uint8_t *payload, size_t size, GPS_UbxPvt_t *out);
 // M10 CFG-VALSET: RAM only, UART1 NAV-PVT + NAV-DOP at 10 Hz, NMEA off.
 // Baud rate, input protocols, constellations, flash and backup RAM are untouched.
 size_t GPS_UbxBuild10HzConfig(uint8_t *out, size_t capacity);
+size_t GPS_UbxBuildStartupConfig(uint8_t *out, size_t capacity, unsigned bds_profile);
+/* Supported comparison periods: 100 ms (10 Hz), 200 ms (5 Hz). */
+size_t GPS_UbxBuildRateConfig(uint8_t *out, size_t capacity, unsigned bds_profile,
+                             unsigned period_ms);
 int GPS_UbxFormatPvt(char *out, size_t capacity, const GPS_UbxPvt_t *pvt);
 
 #endif

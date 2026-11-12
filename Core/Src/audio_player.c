@@ -1,6 +1,7 @@
 #include "audio_player.h"
 #include "sai.h"
 #include "cmsis_os2.h"
+#include "app_storage.h"
 #include <stdbool.h>
 #include <string.h>
 
@@ -178,14 +179,14 @@ void AudioPlayer_Play(const char *path, uint8_t volume_percent)
     osThreadFlagsClear(AUDIO_FLAGS);
 
     audio_state = AUDIO_MOUNTING;
-    audio_file_result = f_mount(&SDFatFS, SDPath, 1);
+    audio_file_result = AppStorage_Mount();
     if (audio_file_result != FR_OK)
     {
         audio_state = AUDIO_MOUNT_FAILED;
         goto cleanup;
     }
     audio_state = AUDIO_OPENING;
-    audio_file_result = f_open(&SDFile, path, FA_READ);
+    audio_file_result = AppStorage_Open(&SDFile, path, FA_READ);
     if (audio_file_result != FR_OK)
     {
         audio_state = AUDIO_OPEN_FAILED;
@@ -268,7 +269,7 @@ cleanup:
     playback_thread = NULL;
     if (file_open)
     {
-        FRESULT close_result = f_close(&SDFile);
+        FRESULT close_result = AppStorage_Close(&SDFile);
         if (close_result != FR_OK && audio_state == AUDIO_DONE)
         {
             audio_file_result = close_result;

@@ -115,7 +115,10 @@ GPS_UbxEvent_t GPS_UbxFeed(GPS_UbxParser_t *p, uint8_t byte)
             p->position = 0;
             // Bound recovery time after a corrupt length. Unknown large frames
             // are discarded; NAV-PVT (92), NAV-DOP (18) and ACK (2) are decoded.
-            if (p->length > 1024U)
+            // NAV-SAT may contain 255 twelve-byte entries. Consume it fully
+            // so diagnostic polls do not look like corrupt navigation data.
+            if (p->length > 1024U && !(p->message_class == 1U &&
+                p->message_id == 0x35U && p->length <= 3068U))
             {
                 p->state = 0;
                 return GPS_UBX_BAD_FRAME;
@@ -196,6 +199,47 @@ size_t GPS_UbxBuild10HzConfig(uint8_t *out, size_t capacity)
     out[sizeof(packet) - 2U] = a;
     out[sizeof(packet) - 1U] = b;
     return sizeof(packet);
+}
+
+size_t GPS_UbxBuildStartupConfig(uint8_t *out, size_t capacity, unsigned bds_profile)
+{
+    if (bds_profile > 2U) return 0;
+    if (bds_profile == 0U) return GPS_UbxBuild10HzConfig(out, capacity);
+    /* Same 10 Hz configuration as baseline, plus an atomic signal selection.
+     * M10 B1I cannot operate with B1C or GLONASS. Keep GLO disabled in both
+     * tests, as in the captured baseline. Other constellations are untouched.
+     * CFG-SIGNAL causes a GNSS restart; startup retries are 2 seconds apart
+     * and diagnostic polls start after 8 seconds (> required 0.5 s wait). */
+    if (out == NULL || capacity < 64U) return 0;
+    size_t original = GPS_UbxBuild10HzConfig(out, capacity);
+    size_t pos = original - 2U;
+    static const uint32_t signal_keys[] = {0x10310022, 0x1031000d, 0x1031000f, 0x10310025};
+    const uint8_t values[] = {1, bds_profile == 1U, bds_profile == 2U, 0};
+    for (unsigned k = 0; k < 4U; ++k) {
+        for (unsigned b = 0; b < 4U; ++b) out[pos++] = (uint8_t)(signal_keys[k] >> (8U*b));
+        out[pos++] = values[k];
+    }
+    out[4] = (uint8_t)(pos - 6U);
+    uint8_t a = 0, b = 0;
+    for (size_t i = 2; i < pos; ++i) { a += out[i]; b += a; }
+    out[pos++] = a; out[pos++] = b;
+    return pos;
+}
+
+size_t GPS_UbxBuildRateConfig(uint8_t *out, size_t capacity, unsigned bds_profile,
+                             unsigned period_ms)
+{
+    if (period_ms != 100U && period_ms != 200U) return 0;
+    size_t size = GPS_UbxBuildStartupConfig(out, capacity, bds_profile);
+    if (!size) return 0;
+    /* Only CFG-RATE-MEAS changes; CFG-RATE-NAV remains one solution per
+     * measurement and both PVT/DOP output rates remain one per solution. */
+    out[14] = (uint8_t)period_ms;
+    out[15] = (uint8_t)(period_ms >> 8);
+    uint8_t a = 0, b = 0;
+    for (size_t i = 2; i < size - 2U; ++i) { a += out[i]; b += a; }
+    out[size-2U] = a; out[size-1U] = b;
+    return size;
 }
 
 int GPS_UbxFormatPvt(char *out, size_t capacity, const GPS_UbxPvt_t *p)

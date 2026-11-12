@@ -21,7 +21,9 @@
 #include "sdmmc.h"
 
 /* USER CODE BEGIN 0 */
-
+/* Optional storage must not prevent GPS, telemetry and Bluetooth startup.
+ * Keep the boot failure available to the debugger even if FatFs retries. */
+volatile uint32_t sd_boot_error;
 /* USER CODE END 0 */
 
 SD_HandleTypeDef hsd1;
@@ -46,7 +48,8 @@ void MX_SDMMC1_SD_Init(void)
   hsd1.Init.ClockDiv = 4;
   if (HAL_SD_Init(&hsd1) != HAL_OK)
   {
-    Error_Handler();
+    sd_boot_error = HAL_SD_GetError(&hsd1);
+    return;
   }
   /* USER CODE BEGIN SDMMC1_Init 2 */
 

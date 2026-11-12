@@ -56,10 +56,12 @@ void MX_FMC_Init(void)
   hsdram1.Init.ReadPipeDelay = FMC_SDRAM_RPIPE_DELAY_1;
   /* SdramTiming */
   SdramTiming.LoadToActiveDelay = 2;
-  SdramTiming.ExitSelfRefreshDelay = 3;
-  SdramTiming.SelfRefreshTime = 2;
-  SdramTiming.RowCycleDelay = 3;
-  SdramTiming.WriteRecoveryTime = 2;
+  /* W9825G6KH-6 at 100 MHz SDCLK: tXSR >=72 ns, tRAS >=42 ns,
+   * tRC >=60 ns. TWR also satisfies the FMC interdependent constraints. */
+  SdramTiming.ExitSelfRefreshDelay = 8;
+  SdramTiming.SelfRefreshTime = 5;
+  SdramTiming.RowCycleDelay = 7;
+  SdramTiming.WriteRecoveryTime = 3;
   SdramTiming.RPDelay = 2;
   SdramTiming.RCDDelay = 2;
 

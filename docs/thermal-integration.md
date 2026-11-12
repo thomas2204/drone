@@ -6,6 +6,13 @@ The reference does not contain the sensor driver or acquisition code.
 
 ## Clock and I2C
 
+Actual wiring clarified on 2026-11-12: the user's MLX90640 and OV2640 both
+share I2C1 PB8/PB9. The schematic's PH4/PH5 heat-camera test-point labels refer
+to I2C2, but are not the actual connection reported by the user. Keep this
+thermal scaffold on `hi2c1` and the shared I2C1 mutex. MLX90640 normally uses
+7-bit address 0x33; OV2640 uses 0x30. Confirm the actual addresses when both
+are connected. The thermal acquisition driver remains unimplemented.
+
 `projects.ioc` now describes the existing firmware clock configuration:
 HSI 64 MHz, PLL1 M=4 / N=50 / P=2 / Q=4 / R=2, wide VCO,
 SYSCLK 400 MHz, AHB 200 MHz, and all APB buses 100 MHz.

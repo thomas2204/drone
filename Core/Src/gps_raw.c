@@ -12,6 +12,38 @@ static uint8_t gps_dma_rx[GPS_DMA_SIZE]
     __attribute__((section(".dma_buffer"), aligned(32)));
 static SemaphoreHandle_t gps_mutex;
 static GPS_RawSnapshot_t gps_data;
+#if GPS_DIAGNOSTICS_ENABLED
+static GPS_DiagParser_t diagnostic_parser;
+
+static void PollReceiver(uint32_t now)
+{
+    static uint32_t last_poll_ms;
+    static unsigned slot;
+    static unsigned phase;
+    // Wait until the existing startup configuration has finished. These extra
+    // requests only read the receiver; this task owns all UART5 transmission.
+    if (now < 8000U || (uint32_t)(now - last_poll_ms) < 250U) return;
+    last_poll_ms = now;
+    uint8_t packet[16];
+    /* NAV-SAT and MON-RF each once per second; interleave slower ID/config
+     * reads so their growing key list does not make satellite data stale. */
+    unsigned request;
+    if ((phase & 3U) == 0U) request = 15U;
+    else if ((phase & 3U) == 2U) request = 16U;
+    else {
+        request = slot++;
+        if (slot == 15U) slot = 17U;
+        if (slot >= GPS_DIAG_POLLS) slot = 0U;
+    }
+    phase++;
+    size_t size = GPS_DiagBuildPoll(request, packet, sizeof(packet));
+    bool ok = size != 0U && HAL_UART_Transmit(&huart5, packet, (uint16_t)size, 10) == HAL_OK;
+    xSemaphoreTake(gps_mutex, portMAX_DELAY);
+    gps_data.diagnostic.polls++;
+    if (!ok) gps_data.diagnostic.tx_errors++;
+    xSemaphoreGive(gps_mutex);
+}
+#endif
 
 static void ConfigureReceiver(uint32_t now)
 {
@@ -35,8 +67,9 @@ static void ConfigureReceiver(uint32_t now)
     xSemaphoreGive(gps_mutex);
     if (send)
     {
-        uint8_t packet[48];
-        size_t size = GPS_UbxBuild10HzConfig(packet, sizeof(packet));
+        uint8_t packet[64];
+        size_t size = GPS_UbxBuildRateConfig(packet, sizeof(packet), GPS_BDS_TEST_PROFILE,
+                                             GPS_MEASUREMENT_PERIOD_MS);
         // This task is the only UART5 transmitter. DMA reception stays active.
         if (size == 0U || HAL_UART_Transmit(&huart5, packet, (uint16_t)size, 10) != HAL_OK)
         {
@@ -64,7 +97,7 @@ static void ReceiveUbx(GPS_UbxParser_t *parser, GPS_UbxEvent_t event, uint32_t n
             uint32_t step = (parser->pvt.tow_ms + GPS_UBX_WEEK_MS -
                              gps_data.pvt.tow_ms) % GPS_UBX_WEEK_MS;
             gps_data.pvt_step_ms = step;
-            if (step != 100U) gps_data.pvt_gaps++;
+            if (step != GPS_MEASUREMENT_PERIOD_MS) gps_data.pvt_gaps++;
         }
         gps_data.pvt = parser->pvt;
         gps_data.pvt_count++;
@@ -147,6 +180,9 @@ void GPS_RawTask(void)
             collecting_line = false;
             previous_byte = 0;
             GPS_UbxReset(&ubx);
+#if GPS_DIAGNOSTICS_ENABLED
+            GPS_DiagReset(&diagnostic_parser);
+#endif
 
             if (HAL_UART_Receive_DMA(&huart5, gps_dma_rx,
                                      GPS_DMA_SIZE) != HAL_OK)
@@ -166,6 +202,10 @@ void GPS_RawTask(void)
         uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         if (GPS_UbxBusy(&ubx) && (uint32_t)(now - last_rx_ms) > 250U)
             GPS_UbxReset(&ubx);
+#if GPS_DIAGNOSTICS_ENABLED
+        if ((uint32_t)(now - last_rx_ms) > 250U)
+            GPS_DiagReset(&diagnostic_parser);
+#endif
 
         if (pos != old_pos)
         {
@@ -189,6 +229,9 @@ void GPS_RawTask(void)
                 bool binary = GPS_UbxBusy(&ubx) || byte == 0xB5U;
                 GPS_UbxEvent_t event = GPS_UbxFeed(&ubx, byte);
                 ReceiveUbx(&ubx, event, now);
+#if GPS_DIAGNOSTICS_ENABLED
+                GPS_DiagFeed(&diagnostic_parser, byte, &gps_data.diagnostic, now);
+#endif
                 if (binary)
                 {
                     // Binary payload can contain '$' and newline bytes.
@@ -262,6 +305,9 @@ void GPS_RawTask(void)
         }
 
         ConfigureReceiver(now);
+#if GPS_DIAGNOSTICS_ENABLED
+        PollReceiver(now);
+#endif
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

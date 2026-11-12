@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "gps_nmea.h"
 #include "gps_ubx.h"
+#include "gps_diag.h"
 
 #define GPS_RAW_SAMPLE_SIZE 24U
 #define GPS_RAW_LINE_SIZE 128U
@@ -61,6 +62,9 @@ typedef struct
     uint32_t config_naks;
     uint32_t config_tx_errors;
     GPS_ConfigState_t config_state;
+#if GPS_DIAGNOSTICS_ENABLED
+    GPS_DiagSnapshot_t diagnostic;
+#endif
 } GPS_RawSnapshot_t;
 
 void GPS_RawInit(void);

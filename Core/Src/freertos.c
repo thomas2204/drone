@@ -36,6 +36,14 @@
 #include "audio_player.h"
 #include "uwb_range.h"
 #include "i2c.h"
+#include "app_storage.h"
+#include "app_log.h"
+#if APP_CAMERA_ENABLED
+#include "camera_snapshot.h"
+#endif
+#if BOARD_BENCH_TEST
+#include "board_bench.h"
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,7 +105,7 @@ osThreadId_t audio1Handle;
 const osThreadAttr_t audio1_attributes = {
   .name = "audio1",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for thermalTask */
 osThreadId_t thermalTaskHandle;
@@ -156,6 +164,25 @@ void vApplicationMallocFailedHook(void)
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
+  if (!AppStorage_Init() || !AppLog_Init()) Error_Handler();
+#if BOARD_CAMERA_TEST
+  static const osThreadAttr_t camera_attributes = {
+      .name = "camera_test", .stack_size = 16384, .priority = osPriorityNormal
+  };
+  i2c1MutexHandle = osMutexNew(&i2c1Mutex_attributes);
+  if (i2c1MutexHandle == NULL ||
+      osThreadNew(CameraSnapshot_Task, NULL, &camera_attributes) == NULL)
+    Error_Handler();
+  return;
+#endif
+#if BOARD_BENCH_TEST
+  static const osThreadAttr_t bench_attributes = {
+      .name = "board_bench", .stack_size = 4096, .priority = osPriorityNormal
+  };
+  if (osThreadNew(BoardBench_Task, NULL, &bench_attributes) == NULL)
+    Error_Handler();
+  return;
+#endif
   UWB_RangeInit();
   MAVLink_AppInit();
   GPS_RawInit();
@@ -208,6 +235,12 @@ void MX_FREERTOS_Init(void) {
   thermalTaskHandle = osThreadNew(StartThermalTask, NULL, &thermalTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+#if APP_CAMERA_ENABLED
+  static const osThreadAttr_t recorder_attributes = {
+      .name="camera_record", .stack_size=16384, .priority=osPriorityLow
+  };
+  configASSERT(osThreadNew(CameraSnapshot_Task,NULL,&recorder_attributes)!=NULL);
+#endif
   static const osThreadAttr_t uwb_attributes = {
       .name = "uwb_range", .stack_size = 4096, .priority = osPriorityLow
   };
@@ -262,6 +295,10 @@ void BLUETOOTH(void *argument)
     char buffer[192];
     FC_Telemetry_t fc = {0};
     static GPS_RawSnapshot_t gps;
+#if GPS_DIAGNOSTICS_ENABLED
+    uint32_t last_diagnostic_ms = 0;
+    uint32_t previous_pvt_count = 0;
+#endif
 
     for (;;)
     {
@@ -282,7 +319,7 @@ void BLUETOOTH(void *argument)
         else
             length = snprintf(buffer, sizeof(buffer), "Telemetry unavailable\r\n");
         if (length > 0 && (size_t)length < sizeof(buffer))
-            HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            AppLog_Write(buffer, (uint16_t)length, 100);
 
         UWB_RangeSnapshot uwb;
         if (!UWB_RangeGetSnapshot(&uwb))
@@ -304,9 +341,16 @@ void BLUETOOTH(void *argument)
         else
             length = snprintf(buffer, sizeof(buffer), "UWB: no range\r\n");
         if (length > 0 && (size_t)length < sizeof(buffer))
-            HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            AppLog_Write(buffer, (uint16_t)length, 100);
 
-        if (!GPS_RawGetSnapshot(&gps))
+#if APP_CAMERA_ENABLED
+        length = CameraSnapshot_FormatStatus(buffer, sizeof(buffer));
+        if (length > 0 && (size_t)length < sizeof(buffer))
+            AppLog_Write(buffer, (uint16_t)length, 100);
+#endif
+
+        bool gps_available = GPS_RawGetSnapshot(&gps);
+        if (!gps_available)
             length = snprintf(buffer, sizeof(buffer), "GPS: unavailable\r\n");
         else if (gps.pvt_count != 0U)
         {
@@ -327,8 +371,49 @@ void BLUETOOTH(void *argument)
                 length = GPS_NmeaFormatFix(buffer, sizeof(buffer), &gps.fix);
         }
         if (length > 0 && (size_t)length < sizeof(buffer))
-            HAL_UART_Transmit(&huart7, (uint8_t *)buffer, (uint16_t)length, 100);
+            AppLog_Write(buffer, (uint16_t)length, 100);
 
+#if GPS_DIAGNOSTICS_ENABLED
+        uint32_t diagnostic_now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        if (gps_available && (uint32_t)(diagnostic_now - last_diagnostic_ms) >= 10000U)
+        {
+            static const char *config_names[] = {"WAIT", "SENT", "ACK", "NAK", "TIMEOUT"};
+            uint32_t elapsed = diagnostic_now - last_diagnostic_ms;
+            uint32_t rate_x10 = (uint32_t)((uint64_t)(gps.pvt_count - previous_pvt_count) * 10000U / elapsed);
+            previous_pvt_count = gps.pvt_count;
+            last_diagnostic_ms = diagnostic_now;
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS SETUP CFG=%s attempts=%lu ack=%lu nak=%lu txerr=%lu BDS-test=%u targetStep=%ums\r\n",
+                (unsigned)gps.config_state < 5U ? config_names[gps.config_state] : "?",
+                (unsigned long)gps.config_attempts,(unsigned long)gps.config_acks,
+                (unsigned long)gps.config_naks,(unsigned long)gps.config_tx_errors,(unsigned)GPS_BDS_TEST_PROFILE,
+                (unsigned)GPS_MEASUREMENT_PERIOD_MS);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                AppLog_Write(buffer, (uint16_t)length, 100);
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS PVT count=%lu RX=%lu.%luHz step=%lums age=%lums bad=%lu dup=%lu gap=%lu\r\n",
+                (unsigned long)gps.pvt_count,(unsigned long)(rate_x10/10U),(unsigned long)(rate_x10%10U),
+                (unsigned long)gps.pvt_step_ms,(unsigned long)(diagnostic_now-gps.last_pvt_ms),
+                (unsigned long)gps.ubx_errors,(unsigned long)gps.pvt_duplicates,(unsigned long)gps.pvt_gaps);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                AppLog_Write(buffer, (uint16_t)length, 100);
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS ACC valid=%u type=%u flags=0x%02x hAcc=%lumm vAcc=%lumm sAcc=%lumm/s HDOPx100=%u VDOPx100=%u sameEpoch=%u\r\n",
+                (unsigned)gps.pvt.fix_ok,(unsigned)gps.pvt.fix_type,(unsigned)gps.pvt.flags,
+                (unsigned long)gps.pvt.horizontal_accuracy_mm,(unsigned long)gps.pvt.vertical_accuracy_mm,
+                (unsigned long)gps.pvt.speed_accuracy_mm_s,(unsigned)gps.dop.hdop_x100,(unsigned)gps.dop.vdop_x100,
+                (unsigned)(gps.dop_count != 0U && gps.pvt_count != 0U && gps.dop.tow_ms == gps.pvt.tow_ms));
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                AppLog_Write(buffer, (uint16_t)length, 100);
+            for (unsigned line = 0; line < GPS_DIAG_BASE_LINES + GPS_DIAG_TOP_SATS; ++line)
+            {
+                length = GPS_DiagFormatLine(&gps.diagnostic, line, diagnostic_now, buffer, sizeof(buffer));
+                if (length == 0) break;
+                if (length > 0 && (size_t)length < sizeof(buffer))
+                    AppLog_Write(buffer, (uint16_t)length, 100);
+            }
+        }
+#endif
         osDelay(1000);
     }
   /* USER CODE END BLUETOOTH */
