@@ -91,6 +91,7 @@ int main(void)
   /* Enable I-Cache---------------------------------------------------------*/
   SCB_EnableICache();
 
+
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
@@ -104,7 +105,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-__HAL_RCC_D2SRAM1_CLK_ENABLE();
+  __HAL_RCC_D2SRAM1_CLK_ENABLE();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */

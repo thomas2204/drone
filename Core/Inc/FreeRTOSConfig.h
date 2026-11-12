@@ -69,7 +69,7 @@ extern uint32_t SystemCoreClock;
 #define configUSE_SB_COMPLETED_CALLBACK          ( 0 )
 #define configUSE_MINI_LIST_ITEM                ( 1 )
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
-#define configTOTAL_HEAP_SIZE                    ((size_t)65536)
+#define configTOTAL_HEAP_SIZE                    ((size_t)98304)
 #define configCHECK_FOR_STACK_OVERFLOW           2
 #define configUSE_MALLOC_FAILED_HOOK             1
 #define configUSE_NEWLIB_REENTRANT               0

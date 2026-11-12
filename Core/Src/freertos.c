@@ -23,6 +23,7 @@
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+#include "thermal_test.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -104,7 +105,7 @@ osThreadId_t thermalTaskHandle;
 const osThreadAttr_t thermalTask_attributes = {
   .name = "thermalTask",
   .stack_size = 2048 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for i2c1Mutex */
 osMutexId_t i2c1MutexHandle;
@@ -460,10 +461,8 @@ void StartThermalTask(void *argument)
    * Acquire i2c1MutexHandle around each complete I2C operation; release it
    * before temperature calculations, frame waits, logging or display work.
    * There is deliberately no camera traffic until its driver is imported. */
-  for (;;)
-  {
-    osDelay(1000);
-  }
+  thermal_test_run();
+  
   /* USER CODE END StartThermalTask */
 }
 
