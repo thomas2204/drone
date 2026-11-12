@@ -8,6 +8,9 @@
 #include "camera_mp4.h"
 #include "app_storage.h"
 #include "app_log.h"
+#if !BOARD_CAMERA_TEST
+#include "record_control.h"
+#endif
 #include "camera_storage_pattern.h"
 #include "cmsis_os2.h"
 #include "dcmi.h"
@@ -26,7 +29,7 @@
 #define IO_BYTES 4096U
 
 volatile CameraSnapshotReport camera_snapshot;
-volatile uint32_t camera_snapshot_request = 1;
+volatile uint32_t camera_snapshot_request = BOARD_CAMERA_TEST ? 1U : 0U;
 volatile uint32_t camera_snapshot_save_to_sd = 1;
 volatile uint32_t camera_snapshot_software_sccb;
 volatile uint32_t camera_snapshot_skip_dsp_prefix;
@@ -49,6 +52,7 @@ static uint8_t video_bgr[320U * 240U * 3U]
     __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static FIL camera_file __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static volatile uint32_t frame_done, capture_error;
+static bool commanded_recording;
 
 static void Log(const char *message)
 {
@@ -730,11 +734,22 @@ static bool RecordVideo(void)
         ? CameraAVI_BeginBGR(&avi, AVIWrite, AVISeek, NULL, 320, 240)
         : CameraAVI_Begin(&avi, AVIWrite, AVISeek, NULL, 320, 240);
     if (!started) { if (camera_snapshot.failure == CAMERA_OK) Fail(CAMERA_DATA); goto done; }
+#if !BOARD_CAMERA_TEST
+    if (commanded_recording && !RecordControl_WaitStart(RECORD_CAMERA)) {
+        Fail(CAMERA_TIMEOUT); goto done;
+    }
+#endif
     uint32_t start = HAL_GetTick();
     bool complete = true;
     for (uint32_t i = 0; i < camera_snapshot.video_requested; ++i) {
+#if !BOARD_CAMERA_TEST
+        if (commanded_recording && !RecordControl_HasTime()) break;
+#endif
         uint32_t frame_start = HAL_GetTick();
-        if (i && camera_snapshot.probe_registers != 6U && !Capture()) { complete = false; break; }
+        if ((i || commanded_recording) && camera_snapshot.probe_registers != 6U && !Capture()) { complete = false; break; }
+#if !BOARD_CAMERA_TEST
+        if (commanded_recording && !RecordControl_HasTime()) break;
+#endif
         camera_snapshot.stage = CAMERA_WRITE;
         const uint8_t *jpeg = (const uint8_t *)capture + camera_snapshot.jpeg_offset;
         const uint8_t *data = jpeg;
@@ -758,6 +773,9 @@ static bool RecordVideo(void)
         if (elapsed < 250U) DelayMs(250U - elapsed);
     }
     camera_snapshot.video_duration_ms = HAL_GetTick() - start;
+#if !BOARD_CAMERA_TEST
+    if (commanded_recording) camera_snapshot.video_duration_ms = record_report.duration_ms;
+#endif
     bool finalized = camera_snapshot.video_mp4
         ? CameraMP4_End(&mp4, camera_snapshot.video_duration_ms)
         : CameraAVI_End(&avi, camera_snapshot.video_duration_ms);
@@ -805,6 +823,9 @@ static bool RecordVideo(void)
         camera_snapshot.captured_bytes = file_bytes;
     }
     ok = complete;
+#if !BOARD_CAMERA_TEST
+    if (commanded_recording && record_report.failed) ok = Fail(CAMERA_TIMEOUT);
+#endif
 done:
     camera_snapshot.sd_error = hsd1.ErrorCode;
     if (opened) {
@@ -820,12 +841,17 @@ done:
 
 int CameraSnapshot_FormatStatus(char *buffer, size_t size)
 {
+    if (!camera_snapshot.done && !camera_snapshot.video_requested)
+        return snprintf(buffer,size,"CAM: idle; send record\r\n");
     if (camera_snapshot.done && camera_snapshot.failure)
         return snprintf(buffer,size,"CAM: failed stage=%lu error=%lu\r\n",
             (unsigned long)camera_snapshot.stage,(unsigned long)camera_snapshot.failure);
     if (camera_snapshot.done)
         return snprintf(buffer,size,"CAM: saved %s frames=%lu\r\n",
             (const char *)camera_snapshot.filename,(unsigned long)camera_snapshot.video_frames);
+    if (commanded_recording && camera_snapshot.video_frames)
+        return snprintf(buffer,size,"CAM: recording 10s frames=%lu\r\n",
+            (unsigned long)camera_snapshot.video_frames);
     if (camera_snapshot.video_frames)
         return snprintf(buffer,size,"CAM: recording %lu/%lu\r\n",
             (unsigned long)camera_snapshot.video_frames,(unsigned long)camera_snapshot.video_requested);
@@ -839,6 +865,13 @@ void CameraSnapshot_Task(void *argument)
     DelayMs(1500); /* Let application reception and audio tasks start first. */
 #endif
     for (;;) {
+#if !BOARD_CAMERA_TEST
+        if (RecordControl_TakeRequest(RECORD_CAMERA)) {
+            commanded_recording = true;
+            camera_snapshot_video_frames = CAMERA_AVI_MAX_FRAMES;
+            camera_snapshot_request = 1;
+        }
+#endif
         if (camera_snapshot_request) {
             camera_snapshot_request = 0;
             memset((void *)&camera_snapshot, 0, sizeof(camera_snapshot));
@@ -905,7 +938,11 @@ void CameraSnapshot_Task(void *argument)
             if (length > 0 && (size_t)length < sizeof(message)) Log(message);
             if (!ok && camera_snapshot.failure == CAMERA_I2C)
                 Log("CAMERA: SCCB transfer failed; software, wiring, power and module clock remain unverified\r\n");
+#if !BOARD_CAMERA_TEST
+            if (commanded_recording) RecordControl_Done(RECORD_CAMERA,ok);
+#endif
+            commanded_recording = false;
         }
-        DelayMs(1000);
+        DelayMs(20);
     }
 }

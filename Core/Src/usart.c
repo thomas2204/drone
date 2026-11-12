@@ -299,6 +299,8 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN UART7_MspInit 1 */
+    HAL_NVIC_SetPriority(UART7_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(UART7_IRQn);
 
   /* USER CODE END UART7_MspInit 1 */
   }
@@ -453,6 +455,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_3|GPIO_PIN_4);
 
   /* USER CODE BEGIN UART7_MspDeInit 1 */
+    HAL_NVIC_DisableIRQ(UART7_IRQn);
 
   /* USER CODE END UART7_MspDeInit 1 */
   }

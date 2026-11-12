@@ -4,7 +4,7 @@
 
 typedef struct {
     int32_t init_result, last_error, storage_error;
-    uint32_t ready, frames, read_errors, clips, clip_frames;
+    uint32_t ready, frames, read_errors, clips, clip_frames, duration_ms;
     float ambient_c, center_c;
     char filename[16];
 } ThermalReport;

@@ -1,13 +1,38 @@
 # H743 camera recording
 
-The pulled MLX90640 implementation is now integrated too; see
-[thermal integration](thermal-integration.md) for shared-bus timing, SD
-coordination and memory placement. With both cameras running, the final
-board test saved VIDEO003.MP4 (40 frames over 11639 ms, all 345129 sample
-bytes verified) and T0007.AVI (35 thermal frames, successful close).
-Startup audio completed and GPS kept receiving. Evidence:
-build/thermal-merge-final-result.txt. The active pinned image is now
-build/drone-thermal-camera-merged.elf.
+## Bluetooth recording command
+
+Normal firmware waits for `record` over Bluetooth UART7 (115200, 8N1).
+Send the word with CR, LF, CRLF, or as one message without a newline.
+Matching is case-insensitive; surrounding spaces are accepted. Startup
+calibrates the thermal camera but creates no video files. If it is not
+ready yet, the command replies to try again shortly.
+
+Both cameras prepare and open separate numbered files, then share one
+10-second capture window. OV2640 saves VIDEOxxx.MP4 (H.264); MLX90640 saves
+Txxxx.AVI (the imported uncompressed thermal format). Frame counts depend
+on available CPU/SD time. Both container timelines span 10000 ms. Encoding,
+closing and MP4 SD readback can finish after the capture window ends.
+
+Wait for `REC: done; both 10-second files saved` before sending another
+command. A command during preparation, recording or saving replies busy.
+A failure is reported explicitly and releases the other camera from the
+start barrier. Sensor calibration, clocks, shared I2C timing and palette
+are preserved; see [thermal integration](thermal-integration.md).
+
+Physical Bluetooth validation: the user sent commands, UART7 received
+24 bytes with no RX errors/overflows, two sessions succeeded and one busy
+command was rejected. The second session saved VIDEO008.MP4 (34 frames,
+337337 encoded sample bytes verified) and T0013.AVI (10 thermal frames),
+both with duration 10000 ms. GPS and audio remained healthy. Evidence:
+build/record-command-bluetooth-result.txt.
+
+The current pinned image is build/drone-record-command-final.elf.
+`python -m unittest discover -s tests -p 'test_*.py'` checks UART parsing,
+warmup gating, synchronization, deadline/wraparound, busy/repeat requests,
+failure release, thermal AVI layout, sector-safe writes and partial-write
+recovery. Debug, Release and camera-only builds pass. The dedicated
+BOARD_CAMERA_TEST build retains its automatic diagnostic recording.
 
 ## Integrated application
 
@@ -16,21 +41,19 @@ GPS, UWB, MAVLink, Bluetooth and the audio player. `CAMERA_RECORDING=ON` is the
 default; `BOARD_CAMERA_TEST` remains available for camera-only diagnostics.
 Build with `cmake --preset Debug` and `cmake --build build/Debug`.
 
-The recorder starts after a 1.5-second delay, records one 40-frame 320x240
-clip per boot (about 10 seconds at up to 4 fps), finalizes and verifies it,
-then idles. Bluetooth reports `CAM: recording`, `CAM: saved`, or failure.
+The recorder waits for the Bluetooth `record` command, captures a 10-second
+320x240 clip, finalizes and verifies it, then returns to idle. Bluetooth reports `CAM: recording`, `CAM: saved`, or failure.
 There is no audio track in the MP4. External SDRAM is not used.
 
 Audio and camera have separate DMA-accessible file objects. A shared storage
 manager mounts the volume once and prevents unmounting while another file
 is open; FatFs serializes volume operations. Audio runs at normal priority,
 above the low-priority video encoder. Bluetooth messages share a transmit
-mutex. The MLX90640 acquisition task remains a placeholder.
+mutex. The MLX90640 task records on the same command.
 
-The pinned combined image is `build/drone-camera-integrated.elf`. In VS Code,
+The combined build is `build/Debug/projects.elf`. In VS Code,
 select `STM32Cube: Drone + MP4 camera (Debug)` after building Debug.
-Both application and camera-only builds pass, as do all 13 camera host
-tests and the four GPS test programs. The combined board run saved
+Earlier integration validation (before command triggering) saved
 `0:/VIDEO000.MP4`: 40 frames over 10009 ms, all 388382 encoded sample bytes
 verified by SD readback. Camera, FatFs, close and unmount results are zero.
 Audio reached `AUDIO_DONE`, 231075 frames played, `FR_OK`; GPS received
@@ -41,6 +64,10 @@ absent; the user inserted it before this successful run.
 The Media Player playback confirmation below applies to the earlier isolated
 recording using the same MP4 format and encoder.
 Power off the board before removing the SD card.
+
+## Earlier automatic-recording validation
+
+The following results describe historical diagnostic builds.
 
 **Playback confirmed:** the user opened the actual MCU/SD-exported
 camera-real-mcu.mp4 in Windows Media Player and explicitly replied

@@ -22,6 +22,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "usart.h"
 #include "sai.h"
 /* USER CODE END Includes */
 
@@ -333,6 +334,14 @@ void DCMI_IRQHandler(void)
   /* USER CODE END DCMI_IRQn 1 */
 }
 
+void UART7_IRQHandler(void)
+{
+  /* USER CODE BEGIN UART7_IRQn 0 */
+  /* USER CODE END UART7_IRQn 0 */
+  HAL_UART_IRQHandler(&huart7);
+  /* USER CODE BEGIN UART7_IRQn 1 */
+  /* USER CODE END UART7_IRQn 1 */
+}
 /* USER CODE BEGIN 1 */
 
 void SAI2_IRQHandler(void)

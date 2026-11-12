@@ -65,6 +65,7 @@ void UART5_IRQHandler(void);
 void TIM6_DAC_IRQHandler(void);
 void DCMI_IRQHandler(void);
 /* USER CODE BEGIN EFP */
+void UART7_IRQHandler(void);
 void WWDG_IRQHandler(void);
 void SAI2_IRQHandler(void);
 

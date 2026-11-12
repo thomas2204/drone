@@ -239,7 +239,7 @@ int avi_add_frame(const float *To)
     return 0;
 }
 
-int avi_close(void)
+int avi_close_duration(uint32_t duration_ms)
 {
     uint32_t n = 0;
 
@@ -265,7 +265,7 @@ int avi_close(void)
     }
 
     /* rewrite the header now that the real frame count and speed are known */
-    build_header(n_frames, t_last_ms - t_start_ms);
+    build_header(n_frames, duration_ms ? duration_ms : t_last_ms - t_start_ms);
     if (f_lseek(&vf, 0) != FR_OK) { AppStorage_Close(&vf); return -4; }
     if (write_all(hdr, HDR_SIZE)) { AppStorage_Close(&vf); return -5; }
     return (AppStorage_Close(&vf) == FR_OK) ? 0 : -6;
@@ -274,4 +274,9 @@ int avi_close(void)
 uint32_t avi_frames(void)
 {
     return n_frames;
+}
+
+int avi_close(void)
+{
+    return avi_close_duration(0);
 }

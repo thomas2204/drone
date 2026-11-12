@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "thermal_test.h"
+#include "record_control.h"
 #include "mk_app.h"
 #include "gps_raw.h"
 #include "usart.h"
@@ -246,6 +247,7 @@ void MX_FREERTOS_Init(void) {
   thermalTaskHandle = osThreadNew(StartThermalTask, NULL, &thermalTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  configASSERT(RecordControl_Init());
 #if APP_CAMERA_ENABLED
   static const osThreadAttr_t recorder_attributes = {
       .name="camera_record", .stack_mem=camera_task_stack,

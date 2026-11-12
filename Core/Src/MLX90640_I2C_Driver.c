@@ -6,6 +6,7 @@
 #include "MLX90640_I2C_Driver.h"
 #include "main.h"
 #include "cmsis_os2.h"
+#include "record_control.h"
 
 extern I2C_HandleTypeDef hi2c1;
 extern osMutexId_t i2c1MutexHandle;
@@ -28,6 +29,8 @@ int MLX90640_I2CRead(uint8_t slaveAddr, uint16_t startAddress,
     if (nMemAddressRead > 832) {
         return -1;
     }
+    if (startAddress==0x8000 && record_report.active && record_report.started &&
+        !RecordControl_HasTime()) return -1;
     if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK) return -1;
     HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(slaveAddr << 1), startAddress,
                          I2C_MEMADD_SIZE_16BIT, buf,

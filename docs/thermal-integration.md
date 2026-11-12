@@ -2,10 +2,12 @@
 
 The pulled MLX90640 implementation is now built into the normal application.
 Its sensor calibration and temperature calculations, refresh setting 0x04,
-emissivity 0.95, Ta shift 8 C, iron-bow palette, bilinear 320x240 output and
-30-second clips every 120 seconds are retained. The initial snapshot and
-60-frame thermal recording are also retained. Existing thermal AVI files
-are not overwritten; subsequent clips use T0001.AVI, T0002.AVI, etc.
+emissivity 0.95, Ta shift 8 C, iron-bow palette and bilinear 320x240 output
+are retained. Automatic startup/periodic recording has been replaced by
+Bluetooth `record`: both cameras prepare, share a 10-second capture window,
+then finalize their files and return to idle. Existing files are not
+overwritten; thermal clips use T0001.AVI, T0002.AVI, etc. See
+[camera recording](camera-video.md) for commands and current validation.
 The AVI format is retained from the imported code; Windows Media Player
 compatibility of thermal AVI has not been established. OV2640 uses the
 previously playback-confirmed H.264 MP4 format.
@@ -17,7 +19,8 @@ SYSCLK 400 MHz, AHB 200 MHz, all APB buses 100 MHz. PLL2 remains
 M=4/N=10/P=2/Q=2/R=2 for ADC. PLL3 remains
 M=4/N=12/P=4/Q=4/R=8/FRACN=2359 for audio. I2C123 uses D2PCLK1
 100 MHz. SDMMC uses PLL1Q 200 MHz with ClockDiv=4. Pins, DMA stream
-assignments and DCMI active-low VSYNC are retained.
+assignments and DCMI active-low VSYNC are retained. UART7 RX now uses its
+interrupt at priority 5, with the same entry enabled in the IOC.
 
 Both cameras physically share I2C1 PB8/PB9: MLX90640 7-bit address 0x33,
 OV2640 0x30. The thermal bus configuration 0x009034B6 (400 kHz target)
@@ -74,7 +77,7 @@ AUDIO_DONE and GPS continued receiving PVT messages. CPU clock was read as
 400000000 and the restored I2C1 TIMINGR as 0x009034B6. These are functional
 checks, not oscilloscope measurements of I2C rise time.
 
-Final combined Debug hardware test: VIDEO003.MP4, 40 frames over 11639 ms,
+Earlier automatic-recording combined Debug hardware test: VIDEO003.MP4, 40 frames over 11639 ms,
 345129 encoded sample bytes verified; T0007.AVI, 35 thermal frames,
 no read/storage errors. Audio played 231075 frames; GPS PVT count reached
 249. All 11 tasks remained present with 71672 RTOS heap bytes free.

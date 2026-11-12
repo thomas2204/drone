@@ -74,7 +74,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/app_storage.c Core/Src/app
 if(NOT BOARD_CAMERA_TEST AND NOT BOARD_BENCH_TEST)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         Core/Src/MLX90640_API.c Core/Src/MLX90640_I2C_Driver.c
-        Core/Src/thermal_test.c Core/Src/thermal_avi.c Core/Src/thermal_palette.c)
+        Core/Src/thermal_test.c Core/Src/thermal_avi.c Core/Src/thermal_palette.c
+        Core/Src/record_control.c)
     set_source_files_properties(Core/Src/MLX90640_API.c Core/Src/thermal_avi.c
         Core/Src/thermal_palette.c PROPERTIES COMPILE_OPTIONS "-O2")
 endif()

@@ -77,7 +77,7 @@ void inject(int); int files_open(void); int alignment_errors(void);
 int main(void) {
     float frame[768];
     for(int y=0;y<24;y++) for(int x=0;x<32;x++) frame[y*32+x]=20.0f+y;
-    if(avi_open("thermal.avi") || avi_add_frame(frame) || avi_add_frame(frame) || avi_close()) return 1;
+    if(avi_open("thermal.avi") || avi_add_frame(frame) || avi_add_frame(frame) || avi_close_duration(10000)) return 1;
     if(avi_open("thermal.avi")==0) return 2;
     if(avi_open("failure.avi") || avi_add_frame(frame)) return 3;
     inject(5);
@@ -106,6 +106,8 @@ int main(void) {
         self.assertEqual(u32(4), len(data)-8)
         self.assertEqual(data[8:12], b'AVI ')
         self.assertEqual(u32(48), 2)
+        self.assertEqual(u32(32), 5000000)  # Two frames span exactly 10 seconds.
+        self.assertEqual(u32(132), 200)  # dwRate / dwScale = 0.2 fps.
         self.assertEqual((u32(176), u32(180)), (320, 240))
         self.assertEqual(data[224:228], b'00db')
         self.assertEqual(u32(228), 230400)

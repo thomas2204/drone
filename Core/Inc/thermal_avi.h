@@ -19,6 +19,8 @@ int      avi_add_frame(const float *To);
 /* Write the index and patch the header with the real frame count and speed.
  * The file is only a valid video after this call. 0 = OK. */
 int      avi_close(void);
+/* Finalize a command-length clip with the common recording duration. */
+int      avi_close_duration(uint32_t duration_ms);
 
 uint32_t avi_frames(void);
 
