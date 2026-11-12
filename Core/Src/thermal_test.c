@@ -52,15 +52,50 @@ static int ThermalLog(const char *format, ...)
 }
 #define printf ThermalLog
 
+/* Called only during thermal startup while the shared bus mutex is held.
+ * A failed BUSY/timeout probe can leave the peripheral driving a line low.
+ * Release both pins briefly with weak pull-ups, then restore every GPIO bit
+ * and CR1 exactly. This neither drives push-pull nor changes clock/timing. */
+static bool release_bus_locked(void)
+{
+    uint32_t control=hi2c1.Instance->CR1;
+    uint32_t mode=GPIOB->MODER, pull=GPIOB->PUPDR;
+    __HAL_I2C_DISABLE(&hi2c1);
+    GPIOB->MODER=mode & ~(0xFU << 16);
+    GPIOB->PUPDR=(pull & ~(0xFU << 16)) | (0x5U << 16);
+    osDelay(2);
+    uint32_t lines=(GPIOB->IDR >> 8) & 3U;
+    GPIOB->PUPDR=pull;
+    GPIOB->MODER=mode;
+    hi2c1.Instance->CR1=control;
+    thermal_report.probe_recoveries++;
+    thermal_report.probe_recovery_lines=lines;
+    return lines==3U;
+}
+
 static int mlx_init(void)
 {
     int st;
 
     if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK) return -1;
     HAL_StatusTypeDef ready = HAL_I2C_IsDeviceReady(&hi2c1, MLX_ADDR << 1, 3, 100);
+    if (ready==HAL_BUSY || (HAL_I2C_GetError(&hi2c1) & HAL_I2C_ERROR_TIMEOUT)) {
+        thermal_report.probe_previous_error=HAL_I2C_GetError(&hi2c1);
+        if (release_bus_locked())
+            ready=HAL_I2C_IsDeviceReady(&hi2c1, MLX_ADDR << 1, 3, 100);
+    }
+    thermal_report.probe_attempts++;
+    thermal_report.probe_hal=ready;
+    thermal_report.probe_i2c_error=HAL_I2C_GetError(&hi2c1);
+    thermal_report.probe_isr=hi2c1.Instance->ISR;
+    thermal_report.probe_scl=HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_8);
+    thermal_report.probe_sda=HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_9);
     osMutexRelease(i2c1MutexHandle);
     if (ready != HAL_OK) {
-        printf("MLX90640: no ACK at 0x%02X (check SDA/SCL, power, pull-ups)\r\n", MLX_ADDR);
+        printf("MLX90640: probe 0x%02X failed HAL=%lu I2C=0x%lX ISR=0x%lX SCL=%lu SDA=%lu\r\n",
+            MLX_ADDR,(unsigned long)thermal_report.probe_hal,
+            (unsigned long)thermal_report.probe_i2c_error,(unsigned long)thermal_report.probe_isr,
+            (unsigned long)thermal_report.probe_scl,(unsigned long)thermal_report.probe_sda);
         return -1;
     }
     st = MLX90640_DumpEE(MLX_ADDR, ee);

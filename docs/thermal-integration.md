@@ -85,3 +85,36 @@ Final link use: DTCM 61712/131072 bytes, AXI 496960/524288 bytes,
 D2 288288/294912 bytes. AXI and D2 are near capacity; additional DMA
 buffers require a memory placement review. The clock/IOC comparison is
 saved in build/thermal-merge-config-audit.json.
+
+
+## Thermal startup timeout recovery
+
+A later board run reported the old generic "no ACK" message, but live
+inspection found HAL_I2C_ERROR_TIMEOUT (0x20), I2C ISR BUSY (0x8000), and
+PB8/PB9 both low. GPIO mode/AF/open-drain, CPU clock and TIMINGR were correct.
+With the MCU halted, disabling I2C, temporarily releasing PB8/PB9 as inputs
+with weak pull-ups, and restoring GPIO/CR1 made both lines high. The next
+normal probe ACKed and EEPROM/calibration/frame acquisition succeeded.
+Evidence: build/heat-noack-live-before.txt,
+build/heat-noack-released-pins.txt and build/heat-noack-after-release.txt.
+This establishes a recoverable stuck bus/controller condition; it does not
+establish its original trigger or a permanent short.
+
+Thermal startup now performs that bounded release once per failed BUSY or
+HAL-timeout probe, with the shared mutex held. It waits 2 RTOS ticks with
+weak pulls, restores GPIO configuration and CR1, and retries only if both
+lines were released high. It does not force high outputs or change clocks,
+I2C timing, filters, or device addresses. An unresponsive device or a line
+still held low continues to report failure and retry later.
+
+Probe diagnostics now distinguish HAL status, error flags, peripheral ISR
+and individual SDA/SCL levels rather than labelling every error "no ACK".
+thermal_report also exposes recovery count and the preceding error.
+A controlled debugger injection of HAL_BUSY/TIMEOUT at the first probe
+exercised the automatic recovery: recovery count 1, previous error 0x20,
+released lines 3, final ACK success, and successful warmup frames. This was
+a simulated probe failure, not a second naturally occurring fault.
+Evidence: build/heat-recovery-injected-result.txt. TIMINGR remained
+0x009034B6; GPIO mode/pulls were restored. The pinned firmware is
+build/drone-heat-recovery.elf. Debug/Release builds and the three host tests
+pass.
