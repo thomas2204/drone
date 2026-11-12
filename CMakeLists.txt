@@ -40,6 +40,8 @@ option(BOARD_BENCH_TEST "Run SDRAM diagnostics instead of application tasks" OFF
 option(BOARD_CAMERA_TEST "Record OV2640 H.264 MP4 to SD using internal SRAM" OFF)
 option(CAMERA_RECORDING "Include MP4 recording in the normal application" ON)
 option(GPS_DIAGNOSTICS "Read GPS configuration and RF/satellite diagnostics over UART5" OFF)
+option(GPS_VERBOSE_LOGS "Print detailed GPS diagnostics over Bluetooth" OFF)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GPS_VERBOSE_LOGS=$<BOOL:${GPS_VERBOSE_LOGS}>)
 set(GPS_BDS_TEST_PROFILE "0" CACHE STRING "BDS RAM test: 0 preserve, 1 B1I, 2 B1C")
 set(GPS_MEASUREMENT_PERIOD_MS "100" CACHE STRING "GPS measurement period: 100 ms (10 Hz) or 200 ms (5 Hz)")
 set_property(CACHE GPS_MEASUREMENT_PERIOD_MS PROPERTY STRINGS 100 200)

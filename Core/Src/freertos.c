@@ -311,7 +311,8 @@ void BLUETOOTH(void *argument)
     char buffer[192];
     FC_Telemetry_t fc = {0};
     static GPS_RawSnapshot_t gps;
-#if GPS_DIAGNOSTICS_ENABLED
+    uint32_t last_gps_status_ms = HAL_GetTick() - 5000U;
+#if GPS_DIAGNOSTICS_ENABLED && GPS_VERBOSE_LOGS
     uint32_t last_diagnostic_ms = 0;
     uint32_t previous_pvt_count = 0;
 #endif
@@ -386,10 +387,13 @@ void BLUETOOTH(void *argument)
             else
                 length = GPS_NmeaFormatFix(buffer, sizeof(buffer), &gps.fix);
         }
-        if (length > 0 && (size_t)length < sizeof(buffer))
+        if (length > 0 && (size_t)length < sizeof(buffer) &&
+            (uint32_t)(HAL_GetTick() - last_gps_status_ms) >= 5000U) {
+            last_gps_status_ms = HAL_GetTick();
             AppLog_Write(buffer, (uint16_t)length, 100);
+        }
 
-#if GPS_DIAGNOSTICS_ENABLED
+#if GPS_DIAGNOSTICS_ENABLED && GPS_VERBOSE_LOGS
         uint32_t diagnostic_now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         if (gps_available && (uint32_t)(diagnostic_now - last_diagnostic_ms) >= 10000U)
         {
