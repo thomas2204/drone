@@ -111,6 +111,9 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
   __HAL_RCC_D2SRAM1_CLK_ENABLE();
+  /* DMA buffers and the RTOS heap can extend into SRAM2/SRAM3. */
+  __HAL_RCC_D2SRAM2_CLK_ENABLE();
+  __HAL_RCC_D2SRAM3_CLK_ENABLE();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */

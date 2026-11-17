@@ -9,6 +9,11 @@ typedef struct
 {
     bool connected;
     bool armed;
+    bool prearm_supported;
+    bool prearm_enabled;
+    bool prearm_healthy;
+    uint32_t sys_status_count;
+    uint32_t last_sys_status_ms;
 
     uint32_t flight_mode;
     uint32_t heartbeat_count;

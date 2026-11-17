@@ -16,7 +16,7 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "GPS_DIAGNOSTICS": "ON",
-                "GPS_BDS_TEST_PROFILE": "2",
+                "GPS_BDS_TEST_PROFILE": "0",
                 "GPS_MEASUREMENT_PERIOD_MS": "200"
             }
         },

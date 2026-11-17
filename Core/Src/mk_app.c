@@ -95,6 +95,8 @@ static void ProcessMessage(
                 break;
 
             fc_data.heartbeat_count++;
+            if (fc_system_id != msg->sysid)
+                fc_data.sys_status_count = 0U;
             fc_system_id = msg->sysid;
 
             fc_data.last_heartbeat_ms = now;
@@ -106,6 +108,20 @@ static void ProcessMessage(
             fc_data.flight_mode =
                 hb.custom_mode;
 
+            break;
+        }
+
+        case MAVLINK_MSG_ID_SYS_STATUS:
+        {
+            if (fc_data.heartbeat_count == 0U || msg->sysid != fc_system_id) break;
+            mavlink_sys_status_t state;
+            mavlink_msg_sys_status_decode(msg, &state);
+            const uint32_t bit = MAV_SYS_STATUS_PREARM_CHECK;
+            fc_data.prearm_supported = (state.onboard_control_sensors_present & bit) != 0U;
+            fc_data.prearm_enabled = (state.onboard_control_sensors_enabled & bit) != 0U;
+            fc_data.prearm_healthy = (state.onboard_control_sensors_health & bit) != 0U;
+            fc_data.sys_status_count++;
+            fc_data.last_sys_status_ms = now;
             break;
         }
 
@@ -180,6 +196,27 @@ static void ForwardGps(uint32_t now)
             fc_data.gps_tx_errors++;
         xSemaphoreGive(fc_mutex);
     }
+}
+
+/* Same task/transmitter as GPS forwarding. Ask for 1 Hz SYS_STATUS only
+ * when it is missing or stale; do not issue arming or pre-arm commands. */
+static void RequestArmStatus(uint32_t now)
+{
+    static uint32_t last_request_ms;
+    if (fc_data.heartbeat_count == 0U ||
+        (uint32_t)(now - fc_data.last_heartbeat_ms) >= 3000U ||
+        (fc_data.sys_status_count != 0U &&
+         (uint32_t)(now - fc_data.last_sys_status_ms) < 3000U) ||
+        (uint32_t)(now - last_request_ms) < 5000U) return;
+    last_request_ms = now;
+    mavlink_message_t message;
+    uint8_t packet[MAVLINK_MAX_PACKET_LEN];
+    mavlink_msg_command_long_pack_chan(fc_system_id, MAV_COMP_ID_ONBOARD_COMPUTER,
+        MAVLINK_COMM_0, &message, fc_system_id, MAV_COMP_ID_AUTOPILOT1,
+        MAV_CMD_SET_MESSAGE_INTERVAL, 0, MAVLINK_MSG_ID_SYS_STATUS, 1000000,
+        0, 0, 0, 0, 0);
+    uint16_t length = mavlink_msg_to_send_buffer(packet, &message);
+    HAL_UART_Transmit(&MAV_UART, packet, length, 5);
 }
 
 void MAVLink_Task(void)
@@ -286,6 +323,7 @@ void MAVLink_Task(void)
         }
 
         ForwardGps((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+        RequestArmStatus((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
 
         // Poll once per millisecond
         vTaskDelay(pdMS_TO_TICKS(1));

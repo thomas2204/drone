@@ -48,6 +48,24 @@ static void PollReceiver(uint32_t now)
 static void ConfigureReceiver(uint32_t now)
 {
     static uint32_t last_attempt_ms;
+#if GPS_DIAGNOSTICS_ENABLED && GPS_BDS_TEST_PROFILE == 3
+    static bool signal_write_sent;
+    static uint32_t last_probe_ms;
+    static unsigned probe;
+    const uint16_t required = (1U << 5) | (1U << 13);
+    /* Read GLONASS master/L1 before including CFG-SIGNAL in VALSET.
+     * Unknown settings are preserved, never treated as disabled. */
+    bool known = (gps_data.diagnostic.config_known & required) == required;
+    if (gps_data.config_state == GPS_CONFIG_WAIT && !known && now < 2500U) {
+        if (now >= 250U && now - last_probe_ms >= 250U) {
+            uint8_t poll[16];
+            size_t n = GPS_DiagBuildPoll((probe++ & 1U) ? 14U : 6U, poll, sizeof(poll));
+            HAL_UART_Transmit(&huart5, poll, (uint16_t)n, 10);
+            last_probe_ms = now;
+        }
+        return;
+    }
+#endif
     bool send = false;
     xSemaphoreTake(gps_mutex, portMAX_DELAY);
     if ((gps_data.config_state == GPS_CONFIG_WAIT && now >= 1000U) ||
@@ -68,7 +86,15 @@ static void ConfigureReceiver(uint32_t now)
     if (send)
     {
         uint8_t packet[64];
-        size_t size = GPS_UbxBuildRateConfig(packet, sizeof(packet), GPS_BDS_TEST_PROFILE,
+        unsigned profile = GPS_BDS_TEST_PROFILE;
+#if GPS_DIAGNOSTICS_ENABLED && GPS_BDS_TEST_PROFILE == 3
+        profile = GPS_UbxM9StartupProfile(gps_data.diagnostic.config_known,
+                                         gps_data.diagnostic.config_enabled,
+                                         signal_write_sent);
+        /* A lost ACK must not cause repeated constellation resets. */
+        if (profile == 3U) signal_write_sent = true;
+#endif
+        size_t size = GPS_UbxBuildRateConfig(packet, sizeof(packet), profile,
                                              GPS_MEASUREMENT_PERIOD_MS);
         // This task is the only UART5 transmitter. DMA reception stays active.
         if (size == 0U || HAL_UART_Transmit(&huart5, packet, (uint16_t)size, 10) != HAL_OK)

@@ -76,7 +76,10 @@ bool GPS_UbxDecodePvt(const uint8_t *payload, size_t size, GPS_UbxPvt_t *out);
 // M10 CFG-VALSET: RAM only, UART1 NAV-PVT + NAV-DOP at 10 Hz, NMEA off.
 // Baud rate, input protocols, constellations, flash and backup RAM are untouched.
 size_t GPS_UbxBuild10HzConfig(uint8_t *out, size_t capacity);
+/* Profiles: 0 preserve signals, 1/2 M10 B1I/B1C tests, 3 M9 GLONASS L1 on. */
 size_t GPS_UbxBuildStartupConfig(uint8_t *out, size_t capacity, unsigned bds_profile);
+/* Preserve unknown/already-correct signals; never repeat a signal write. */
+unsigned GPS_UbxM9StartupProfile(uint16_t known, uint16_t enabled, bool signal_write_sent);
 /* Supported comparison periods: 100 ms (10 Hz), 200 ms (5 Hz). */
 size_t GPS_UbxBuildRateConfig(uint8_t *out, size_t capacity, unsigned bds_profile,
                              unsigned period_ms);

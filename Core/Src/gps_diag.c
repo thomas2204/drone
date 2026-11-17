@@ -17,7 +17,7 @@ static const uint32_t filter_keys[GPS_DIAG_FILTERS] = {
     0x301100b1, 0x301100b2, 0x301100b3, 0x10110013,
     0x20d00001, 0x10d0000a, 0x10d00010, 0x20d00006,
     0x20d00007, 0x30d00005, 0x40d00002, 0x40d00003,
-    0x10340014, 0x201100d6
+    0x10340014, 0x201100d6, 0x10230001 /* AssistNow Autonomous enable */
 };
 
 static uint16_t U16(const uint8_t *p) { return (uint16_t)(p[0] | ((uint16_t)p[1] << 8)); }
@@ -222,8 +222,8 @@ int GPS_DiagFormatLine(const GPS_DiagSnapshot_t *s, unsigned line, uint32_t now,
         Filter(s,12,f[0]),Filter(s,13,f[1]),Filter(s,14,f[2]));
     case 15: return snprintf(out, cap, "GPS POWER RAM minAcq=%ss maxAcq=%ss onTime=%ss updatePeriod=%ss\r\n",
         Filter(s,15,f[0]),Filter(s,16,f[1]),Filter(s,17,f[2]),Filter(s,18,f[3]));
-    case 16: return snprintf(out, cap, "GPS EXTRA RAM acqPeriod=%ss BDS-GEO=%s sigAttComp=%s (0=off 255=auto)\r\n",
-        Filter(s,19,f[0]),Filter(s,20,f[1]),Filter(s,21,f[2]));
+    case 16: return snprintf(out, cap, "GPS EXTRA RAM acqPeriod=%ss BDS-GEO=%s sigAttComp=%s ANA=%s (0=off 255=auto)\r\n",
+        Filter(s,19,f[0]),Filter(s,20,f[1]),Filter(s,21,f[2]),Filter(s,22,f[3]));
     default: {
         unsigned i = line-GPS_DIAG_BASE_LINES;
         if (i >= s->top_count) return 0;

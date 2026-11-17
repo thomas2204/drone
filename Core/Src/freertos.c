@@ -29,6 +29,7 @@
 #include "thermal_test.h"
 #include "record_control.h"
 #include "mk_app.h"
+#include "fc_arm_status.h"
 #include "gps_raw.h"
 #include "usart.h"
 #include <stdio.h>
@@ -320,9 +321,11 @@ void BLUETOOTH(void *argument)
     for (;;)
     {
         int length;
+        const char *readiness = "UNKNOWN (telemetry unavailable)";
         if (MAVLink_GetTelemetry(&fc))
         {
             uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            readiness = FC_ArmReadiness(&fc, now);
             const char *arm = fc.connected
                 ? (fc.armed ? "ARMED" : "DISARMED") : "UNKNOWN";
             if (fc.attitude_count == 0U)
@@ -335,6 +338,10 @@ void BLUETOOTH(void *argument)
         }
         else
             length = snprintf(buffer, sizeof(buffer), "Telemetry unavailable\r\n");
+        if (length > 0 && (size_t)length < sizeof(buffer))
+            AppLog_Write(buffer, (uint16_t)length, 100);
+
+        length = snprintf(buffer, sizeof(buffer), "Arm readiness: %s\r\n", readiness);
         if (length > 0 && (size_t)length < sizeof(buffer))
             AppLog_Write(buffer, (uint16_t)length, 100);
 

@@ -201,9 +201,16 @@ size_t GPS_UbxBuild10HzConfig(uint8_t *out, size_t capacity)
     return sizeof(packet);
 }
 
+unsigned GPS_UbxM9StartupProfile(uint16_t known, uint16_t enabled, bool signal_write_sent)
+{
+    const uint16_t required = (1U << 5) | (1U << 13);
+    return !signal_write_sent && (known & required) == required &&
+           (enabled & required) != required ? 3U : 0U;
+}
+
 size_t GPS_UbxBuildStartupConfig(uint8_t *out, size_t capacity, unsigned bds_profile)
 {
-    if (bds_profile > 2U) return 0;
+    if (bds_profile > 3U) return 0;
     if (bds_profile == 0U) return GPS_UbxBuild10HzConfig(out, capacity);
     /* Same 10 Hz configuration as baseline, plus an atomic signal selection.
      * M10 B1I cannot operate with B1C or GLONASS. Keep GLO disabled in both
@@ -215,9 +222,15 @@ size_t GPS_UbxBuildStartupConfig(uint8_t *out, size_t capacity, unsigned bds_pro
     size_t pos = original - 2U;
     static const uint32_t signal_keys[] = {0x10310022, 0x1031000d, 0x1031000f, 0x10310025};
     const uint8_t values[] = {1, bds_profile == 1U, bds_profile == 2U, 0};
-    for (unsigned k = 0; k < 4U; ++k) {
-        for (unsigned b = 0; b < 4U; ++b) out[pos++] = (uint8_t)(signal_keys[k] >> (8U*b));
-        out[pos++] = values[k];
+    /* Profile 3 is M9-only: enable GLONASS master + L1 without any M10
+     * B1C keys or changes to the other constellations. M9 supports concurrent
+     * GPS/Galileo/BeiDou B1I/GLONASS. */
+    static const uint32_t m9_keys[] = {0x10310025, 0x10310018};
+    unsigned count = bds_profile == 3U ? 2U : 4U;
+    for (unsigned k = 0; k < count; ++k) {
+        uint32_t key = bds_profile == 3U ? m9_keys[k] : signal_keys[k];
+        for (unsigned b = 0; b < 4U; ++b) out[pos++] = (uint8_t)(key >> (8U*b));
+        out[pos++] = bds_profile == 3U ? 1U : values[k];
     }
     out[4] = (uint8_t)(pos - 6U);
     uint8_t a = 0, b = 0;
