@@ -119,7 +119,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Include MAVLink C library
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/MAVLink
+    ${CMAKE_SOURCE_DIR}/c_library_v2
     ${CMAKE_SOURCE_DIR}/ws2812b/ws2812-dma
 )
 # Add STM32CubeMX generated sources

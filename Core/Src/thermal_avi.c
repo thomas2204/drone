@@ -1,5 +1,5 @@
 /* thermal_avi.c
- * Renders MLX90640 frames (bilinear 10x, iron-bow palette) and stores them
+ * Renders MLX90640 frames (bilinear 10x, blue->red palette) and stores them
  * as an uncompressed 24-bit AVI on the TF card via FatFS.
  *
  * File layout (all little-endian):
@@ -18,7 +18,6 @@
 #include "ff.h"
 #include <string.h>
 #include "thermal_palette.h"
-#include "app_storage.h"
 
 #define SRC_W        32
 #define SRC_H        24
@@ -29,29 +28,10 @@
 #define RANGE_SMOOTH 0.2f                      /* 0 = frozen, 1 = no smoothing */
 
 /* Static, 32-byte aligned buffers: they must live in AXI SRAM for DMA. */
-static uint8_t row[AVI_W * 3];
-static uint8_t hdr[HDR_SIZE];
-static uint8_t idxbuf[512];
-static uint8_t io[1024] __attribute__((section(".sd_dma_buffer"), aligned(32)));
-static FIL vf __attribute__((section(".sd_dma_buffer"), aligned(32)));
-
-/* Bounce from DTCM/stack to AXI SRAM. Split at the partial-sector boundary
- * so FatFs never sends an unaligned interior pointer to SDMMC IDMA. */
-static int write_all(const void *source, UINT bytes)
-{
-    const uint8_t *p = source;
-    while (bytes) {
-        UINT partial = (UINT)(f_tell(&vf) & 511U);
-        UINT count = partial ? 512U - partial : sizeof(io);
-        if (count > bytes) count = bytes;
-        memcpy(io, p, count);
-        UINT written = 0;
-        if (f_write(&vf, io, count, &written) != FR_OK || written != count) return -1;
-        p += count;
-        bytes -= count;
-    }
-    return 0;
-}
+static uint8_t  chunk[CHUNK_BYTES] __attribute__((aligned(32)));  /* '00db', size, pixels */
+static uint8_t  hdr[HDR_SIZE]      __attribute__((aligned(32)));
+static uint8_t  idxbuf[512]        __attribute__((aligned(32)));
+static FIL      vf;
 
 static uint8_t  lut[256][3];                   /* B, G, R */
 static uint16_t xi[AVI_W], yi[AVI_H];
@@ -153,7 +133,7 @@ static void build_header(uint32_t frames, uint32_t elapsed_ms)
 }
 
 /* ---- rendering ---- */
-static int render(const float *To)
+static void render(const float *To)
 {
     float mn = To[0], mx = To[0];
     for (int i = 1; i < SRC_W * SRC_H; i++) {
@@ -174,12 +154,12 @@ static int render(const float *To)
     }
     float k = 255.0f / (hi - lo);
 
-    for (int y = AVI_H - 1; y >= 0; y--) {
+    for (int y = 0; y < AVI_H; y++) {
         const float *r0 = To + yi[y] * SRC_W;
         const float *r1 = r0 + SRC_W;
         float fy = yf[y];
         /* AVI rows are stored bottom-up */
-        uint8_t *d = row;
+        uint8_t *d = chunk + 8 + (size_t)(AVI_H - 1 - y) * AVI_W * 3;
         for (int x = 0; x < AVI_W; x++) {
             int i = xi[x];
             float fx = xf[x];
@@ -194,53 +174,49 @@ static int render(const float *To)
             d[2] = lut[idx][2];
             d += 3;
         }
-        if (write_all(row, sizeof(row))) return -1;
     }
-    return 0;
 }
 
-/* ---- public API ---- */
+
 int avi_open(const char *name)
 {
+    UINT bw;
+
     if (!tables_ready) tables_init();
-    if (AppStorage_Open(&vf, name, FA_CREATE_NEW | FA_WRITE) != FR_OK) return -1;
+    if (f_open(&vf, name, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) return -1;
 
     n_frames = 0;
     range_ready = 0;
     t_start_ms = HAL_GetTick();
     t_last_ms = t_start_ms;
     build_header(0, 0);
-    if (write_all(hdr, HDR_SIZE)) {
-        AppStorage_Close(&vf);
+    if (f_write(&vf, hdr, HDR_SIZE, &bw) != FR_OK || bw != HDR_SIZE) {
+        f_close(&vf);
         return -2;
     }
+    /* chunk header is the same for every frame */
+    pf(chunk, "00db");
+    p32(chunk + 4, FRAME_BYTES);
     is_open = 1;
     return 0;
 }
 
 int avi_add_frame(const float *To)
 {
+    UINT bw;
+
     if (!is_open) return -1;
-    uint32_t frame_start = (uint32_t)f_tell(&vf);
-    uint8_t chunk_header[8];
-    pf(chunk_header, "00db");
-    p32(chunk_header + 4, FRAME_BYTES);
-    if (write_all(chunk_header, sizeof(chunk_header)) || render(To)) {
-        /* Discard a partially written frame before appending the index. */
-        if (f_lseek(&vf, frame_start) != FR_OK || f_truncate(&vf) != FR_OK) {
-            AppStorage_Close(&vf);
-            is_open = 0;
-        }
-        return -2;
-    }
+    render(To);
+    if (f_write(&vf, chunk, CHUNK_BYTES, &bw) != FR_OK || bw != CHUNK_BYTES) return -2;
     n_frames++;
     t_last_ms = HAL_GetTick();
-    if ((n_frames & 7) == 0 && f_sync(&vf) != FR_OK) return -3;
+    if ((n_frames & 7) == 0) f_sync(&vf);
     return 0;
 }
 
-int avi_close_duration(uint32_t duration_ms)
+int avi_close(void)
 {
+    UINT bw;
     uint32_t n = 0;
 
     if (!is_open) return -1;
@@ -249,7 +225,7 @@ int avi_close_duration(uint32_t duration_ms)
     /* idx1: one 16-byte entry per frame, offsets relative to the 'movi' tag */
     pf(idxbuf, "idx1");
     p32(idxbuf + 4, n_frames * 16);
-    if (write_all(idxbuf, 8)) { AppStorage_Close(&vf); return -2; }
+    if (f_write(&vf, idxbuf, 8, &bw) != FR_OK) { f_close(&vf); return -2; }
 
     for (uint32_t i = 0; i < n_frames; i++) {
         uint8_t *e = idxbuf + n;
@@ -259,24 +235,19 @@ int avi_close_duration(uint32_t duration_ms)
         p32(e + 12, FRAME_BYTES);
         n += 16;
         if (n == sizeof(idxbuf) || i == n_frames - 1) {
-            if (write_all(idxbuf, n)) { AppStorage_Close(&vf); return -3; }
+            if (f_write(&vf, idxbuf, n, &bw) != FR_OK || bw != n) { f_close(&vf); return -3; }
             n = 0;
         }
     }
 
     /* rewrite the header now that the real frame count and speed are known */
-    build_header(n_frames, duration_ms ? duration_ms : t_last_ms - t_start_ms);
-    if (f_lseek(&vf, 0) != FR_OK) { AppStorage_Close(&vf); return -4; }
-    if (write_all(hdr, HDR_SIZE)) { AppStorage_Close(&vf); return -5; }
-    return (AppStorage_Close(&vf) == FR_OK) ? 0 : -6;
+    build_header(n_frames, t_last_ms - t_start_ms);
+    if (f_lseek(&vf, 0) != FR_OK) { f_close(&vf); return -4; }
+    if (f_write(&vf, hdr, HDR_SIZE, &bw) != FR_OK || bw != HDR_SIZE) { f_close(&vf); return -5; }
+    return (f_close(&vf) == FR_OK) ? 0 : -6;
 }
 
 uint32_t avi_frames(void)
 {
     return n_frames;
-}
-
-int avi_close(void)
-{
-    return avi_close_duration(0);
 }
