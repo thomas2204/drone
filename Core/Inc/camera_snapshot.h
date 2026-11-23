@@ -10,7 +10,7 @@ typedef enum {
 typedef enum {
     CAMERA_OK, CAMERA_I2C, CAMERA_SENSOR_ID, CAMERA_DMA, CAMERA_TIMEOUT,
     CAMERA_OVERFLOW, CAMERA_JPEG, CAMERA_SD, CAMERA_FS, CAMERA_DATA,
-    CAMERA_CACHE_ENABLED, CAMERA_REGISTER_MISMATCH
+    CAMERA_CACHE_ENABLED, CAMERA_REGISTER_MISMATCH, CAMERA_PEER_FAILURE
 } CameraFailure;
 typedef struct {
     uint32_t stage, failure, done;
@@ -36,6 +36,8 @@ typedef struct {
     uint32_t selftest_gpio_data, selftest_gpio_a, selftest_gpio_h;
     uint32_t video_uncompressed;
     uint32_t video_mp4;
+    uint32_t frame_period_ms, capture_ms, decode_ms, encode_ms, write_ms, pace_ms;
+    uint32_t failure_stage;
 } CameraSnapshotReport;
 extern volatile CameraSnapshotReport camera_snapshot;
 /* Set to 1 to request another photo after completion or failure. */
@@ -51,7 +53,7 @@ extern volatile uint32_t camera_snapshot_skip_dsp_prefix;
  * 7 tests DMA access and raw RGB capture across all sync/clock polarities;
  * 8 injects a weak-pull waveform with AF13 selected and camera powered down. */
 extern volatile uint32_t camera_snapshot_probe_registers;
-/* Camera build defaults to 40-frame MJPEG AVI, up to 4 fps, max 120 frames.
+/* Camera-only build defaults to 40 frames. Normal commands use a 10s timer.
  * Set zero to save a single JPEG instead. */
 extern volatile uint32_t camera_snapshot_video_frames;
 /* 0xFFFFFFFF preserves profile CLKRC; 0x80 enables the documented doubler. */
@@ -59,9 +61,9 @@ extern volatile uint32_t camera_snapshot_clockrc;
 extern volatile uint32_t camera_snapshot_selftest_pattern;
 /* Diagnostic polarity bits: 0 falling PCLK, 1 high HSYNC, 2 low VSYNC. */
 extern volatile uint32_t camera_snapshot_dcmi_polarities;
-/* Default 1: Windows RGB24 uncompressed AVI; 0 keeps smaller MJPEG AVI. */
+/* 1: legacy RGB24 AVI; 0: camera-compressed MJPEG when video_mp4=0. */
 extern volatile uint32_t camera_snapshot_video_uncompressed;
-/* Default 1: encode H.264 Baseline and write MP4 directly on the H743. */
+/* 1: H.264 MP4 at 320x240; 0: direct MJPEG AVI at 640x480 by default. */
 extern volatile uint32_t camera_snapshot_video_mp4;
 /* Debug export: reread a completed file into capture if it fits 128KiB. */
 extern volatile uint32_t camera_snapshot_export_recording;

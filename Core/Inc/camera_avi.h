@@ -2,7 +2,7 @@
 #define CAMERA_AVI_H
 #include <stdbool.h>
 #include <stdint.h>
-#define CAMERA_AVI_MAX_FRAMES 120U
+#define CAMERA_AVI_MAX_FRAMES 300U
 typedef bool (*CameraAVIWrite)(void *, const void *, uint32_t);
 typedef bool (*CameraAVISeek)(void *, uint32_t);
 typedef struct {

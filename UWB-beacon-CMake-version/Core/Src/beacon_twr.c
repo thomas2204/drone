@@ -62,8 +62,8 @@ static dwt_config_t config = {
     DWT_PHRMODE_STD,    /* standard PHY header                                */
     DWT_PHRRATE_STD,
     4097,              /* Extended SFD timeout for the long-preamble test.   */
-    DWT_STS_MODE_OFF,   /* no STS for now. Turn on together with the drone's  */
-    DWT_STS_LEN_64,     /* PDoA mode later.                                   */
+    DWT_STS_MODE_1 | DWT_STS_MODE_SDC, /* Match drone; deterministic bench STS. */
+    DWT_STS_LEN_128,
     DWT_PDOA_M0
 };
 
@@ -203,12 +203,19 @@ void beacon_twr_step(void)
     if (memcmp(rx_buf, rx_poll_msg, MSG_COMMON_LEN) != 0) {
         return;                               /* some other device's frame */
     }
+    int16_t sts_quality;
+    uint16_t sts_status;
+    if (dwt_readstsquality(&sts_quality, 0) < 0 ||
+        dwt_readstsstatus(&sts_status, 0) != 0) {
+        st.rx_err++;
+        return;
+    }
     st.polls++;
     st.last_seq = seq;
 
     /* 1. when did the poll arrive, on our clock? */
     uint8_t  ts_raw[5];
-    dwt_readrxtimestamp(ts_raw, IPATOV);
+    dwt_readrxtimestamp_ipatov(ts_raw);
     uint64_t poll_rx_ts = ts_to_u64(ts_raw);
 
     /* 2. schedule the response a fixed time later. The chip ignores the lowest

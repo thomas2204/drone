@@ -5,6 +5,8 @@
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "mk_app.h"
+#include "uwb_range.h"
 #include <string.h>
 #include <ctype.h>
 
@@ -30,8 +32,12 @@ bool RecordControl_TakeRequest(uint32_t device)
 bool RecordControl_WaitStart(uint32_t device)
 {
     taskENTER_CRITICAL();
+    if (!record_report.active || !(record_report.devices & device)) {
+        taskEXIT_CRITICAL();
+        return false;
+    }
     record_report.ready |= device;
-    if (record_report.ready == BOTH && !record_report.failed) {
+    if (!record_report.started && record_report.ready == record_report.devices && !record_report.failed) {
         record_report.start_ms = HAL_GetTick() + 20U;
         record_report.started = 1;
     }
@@ -48,16 +54,20 @@ bool RecordControl_WaitStart(uint32_t device)
 
 bool RecordControl_HasTime(void)
 {
-    return record_report.active && record_report.started && !record_report.failed &&
+    /* Once synchronized, each worker owns its result. A failed peer must
+     * not truncate a healthy recording or turn its verification into timeout. */
+    return record_report.active && record_report.started &&
         HAL_GetTick()-record_report.start_ms < record_report.duration_ms;
 }
 
 void RecordControl_Done(uint32_t device, bool success)
 {
     taskENTER_CRITICAL();
-    if (!success) record_report.failed |= device;
-    record_report.done |= device;
-    if (record_report.done == BOTH) record_report.active = 0;
+    if (record_report.active && (record_report.devices & device)) {
+        if (!success) record_report.failed |= device;
+        record_report.done |= device;
+        if (record_report.done == record_report.devices) record_report.active = 0;
+    }
     taskEXIT_CRITICAL();
 }
 
@@ -69,22 +79,49 @@ static void Command(char *line)
     while (length && (begin[length-1]==' ' || begin[length-1]=='\t')) begin[--length]=0;
     if (!length) return;
     for (size_t i=0;i<length;i++) begin[i]=(char)tolower((unsigned char)begin[i]);
-    if (strcmp(begin,"record")) { Log("REC: unknown command; send record\r\n"); return; }
+    if (!strcmp(begin,"patrol") || !strcmp(begin,"patrol stop") || !strcmp(begin,"patrol land")) {
+        MAVLink_PatrolRequest(!strcmp(begin,"patrol") ? 1U :
+            !strcmp(begin,"patrol stop") ? 2U : 3U);
+        Log("PATROL: request received; checking FC telemetry\r\n"); return;
+    }
+    if (!strcmp(begin,"patrol status")) {
+        char status[160]; MAVLink_PatrolStatus(status,sizeof(status)); Log(status); return;
+    }
+    if (!strcmp(begin,"uwb zero")) {
+        Log(UWB_RangeZeroBearing() ?
+            "UWB: forward zero captured; approximate angle enabled (RAM only)\r\n" :
+            "UWB: zero failed; wait for fresh filtered phase, then retry\r\n");
+        return;
+    }
+    const bool camera_only = strcmp(begin, "record cam") == 0;
+    if (!camera_only && strcmp(begin,"record")) {
+        Log("Commands: record, record cam, uwb zero, patrol, patrol stop, patrol land, patrol status\r\n");
+        return;
+    }
+    if (camera_only && !APP_CAMERA_ENABLED) {
+        Log("REC: normal camera unavailable in this build\r\n");
+        return;
+    }
+    const uint32_t devices = camera_only ? RECORD_CAMERA : BOTH;
     record_report.commands++;
     if (record_report.active) {
         record_report.busy_commands++;
-        Log("REC: busy; wait until both files are saved\r\n"); return;
+        Log("REC: busy; wait until recording finishes\r\n"); return;
     }
-    if (!thermal_report.ready) { Log("REC: thermal camera not ready; try again shortly\r\n"); return; }
+    if ((devices & RECORD_THERMAL) && !thermal_report.ready) {
+        Log("REC: thermal camera not ready; try again shortly\r\n"); return;
+    }
     taskENTER_CRITICAL();
     record_report.session++;
-    record_report.pending=BOTH;
+    record_report.devices = devices;
+    record_report.pending = devices;
     record_report.ready=record_report.done=record_report.failed=0;
     record_report.start_ms=record_report.started=0;
     record_report.duration_ms=10000U;
     record_report.active=1;
     taskEXIT_CRITICAL();
-    Log("REC: preparing both cameras for 10 seconds\r\n");
+    Log(camera_only ? "REC: preparing normal camera for 10 seconds\r\n"
+        : "REC: preparing both cameras for 10 seconds\r\n");
 }
 
 static void CommandTask(void *argument)
@@ -94,13 +131,23 @@ static void CommandTask(void *argument)
     unsigned used=0;
     bool overflow=false, announced=false;
     uint32_t last_byte=0, completed_session=0, seen_overflows=0;
+    uint32_t last_patrol_status=0;
+    char previous_patrol_status[160]={0};
     if (HAL_UART_Receive_IT(&huart7,&received_byte,1)!=HAL_OK) record_report.rx_errors++;
-    Log("REC: send record to capture both cameras for 10 seconds\r\n");
+    Log("REC: send record for both cameras or record cam for normal camera only\r\n");
     for (;;) {
         /* Acknowledge the old session before parsing a new command. */
         if (!record_report.active && record_report.session!=completed_session) {
             completed_session=record_report.session; announced=false;
-            Log(record_report.failed ? "REC: finished with errors; check camera messages\r\n"
+            if (record_report.devices == RECORD_CAMERA)
+                Log(record_report.failed ? "REC: normal camera recording failed\r\n"
+                    : "REC: done; normal camera file saved\r\n");
+            else if (record_report.devices == RECORD_THERMAL)
+                Log(record_report.failed ? "REC: thermal recording failed\r\n"
+                    : "REC: done; thermal file saved\r\n");
+            else Log(record_report.failed==RECORD_THERMAL ? "REC: normal camera saved; thermal recording failed\r\n"
+                : record_report.failed==RECORD_CAMERA ? "REC: thermal saved; normal camera recording failed\r\n"
+                : record_report.failed ? "REC: both recordings failed; check camera messages\r\n"
                 : "REC: done; both 10-second files saved\r\n");
         }
         if (record_report.rx_overflows!=seen_overflows) {
@@ -125,7 +172,17 @@ static void CommandTask(void *argument)
             used=0; overflow=false;
         }
         if (record_report.started && record_report.active && !announced) {
-            Log("REC: recording both cameras for 10 seconds\r\n"); announced=true;
+            Log(record_report.devices == RECORD_CAMERA ? "REC: recording normal camera for 10 seconds\r\n"
+                : record_report.devices == RECORD_THERMAL ? "REC: recording thermal camera for 10 seconds\r\n"
+                : "REC: recording both cameras for 10 seconds\r\n");
+            announced=true;
+        }
+        if (HAL_GetTick()-last_patrol_status >= 1000U) {
+            char status[160]; MAVLink_PatrolStatus(status,sizeof(status));
+            if (strcmp(status,previous_patrol_status)) {
+                Log(status); memcpy(previous_patrol_status,status,strlen(status)+1U);
+            }
+            last_patrol_status=HAL_GetTick();
         }
         osDelay(10);
     }

@@ -1,5 +1,10 @@
 # Distance to the beacon
 
+**Current two-antenna firmware:** see [PDoA setup](uwb-pdoa.md) for the
+matching STS settings on both boards, automatic antenna switching, builds,
+measurement validity and required bearing calibration. Single-antenna/STS-off
+configuration descriptions and historical measurements below predate that change.
+
 The drone now runs an SS-TWR initiator in its own `uwb_range` task. The protocol
 matches `UWB-beacon-CMake-version/Core/Src/beacon_twr.c`; that folder is reference
 code and is not linked into the drone firmware. The Qorvo driver was copied into

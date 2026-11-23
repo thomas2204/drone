@@ -39,6 +39,14 @@ add_executable(${CMAKE_PROJECT_NAME})
 option(BOARD_BENCH_TEST "Run SDRAM diagnostics instead of application tasks" OFF)
 option(BOARD_CAMERA_TEST "Record OV2640 H.264 MP4 to SD using internal SRAM" OFF)
 option(CAMERA_RECORDING "Include MP4 recording in the normal application" ON)
+option(CAMERA_FAST_MJPEG "Record direct 640x480 MJPEG AVI instead of software H.264" ON)
+option(CAMERA_FLOW_BENCH "Measure image motion during MJPEG recording" OFF)
+option(CAMERA_FLOW_HW_JPEG "Benchmark the STM32 JPEG peripheral for optical flow" OFF)
+option(CAMERA_FLOW_MAVLINK "Publish calibrated camera flow to the FC for bench testing" OFF)
+set(CAMERA_FLOW_FX_X100 "0" CACHE STRING "Calibrated horizontal focal length at 80x60, in hundredths of a pixel")
+set(CAMERA_FLOW_FY_X100 "0" CACHE STRING "Calibrated vertical focal length at 80x60, in hundredths of a pixel")
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CAMERA_FLOW_BENCH=$<BOOL:${CAMERA_FLOW_BENCH}>)
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CAMERA_FAST_MJPEG=$<BOOL:${CAMERA_FAST_MJPEG}>)
 option(GPS_DIAGNOSTICS "Read GPS configuration and RF/satellite diagnostics over UART5" OFF)
 option(GPS_VERBOSE_LOGS "Print detailed GPS diagnostics over Bluetooth" OFF)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE GPS_VERBOSE_LOGS=$<BOOL:${GPS_VERBOSE_LOGS}>)
@@ -82,12 +90,41 @@ if(NOT BOARD_CAMERA_TEST AND NOT BOARD_BENCH_TEST)
         Core/Src/thermal_palette.c PROPERTIES COMPILE_OPTIONS "-O2")
 endif()
 if(APP_CAMERA_ENABLED)
+    if(CAMERA_FLOW_BENCH)
+        target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/camera_flow.c)
+        set_source_files_properties(Core/Src/camera_flow.c PROPERTIES COMPILE_OPTIONS "-O2")
+        if(CAMERA_FLOW_HW_JPEG)
+            set(STM32_JPEG_HAL_DIR "$ENV{USERPROFILE}/STM32Cube/Repository/STM32Cube_FW_H7_V1.13.0/Drivers/STM32H7xx_HAL_Driver"
+                CACHE PATH "Root of the CubeH7 HAL package providing the JPEG driver")
+            if(NOT EXISTS "${STM32_JPEG_HAL_DIR}/Src/stm32h7xx_hal_jpeg.c")
+                message(FATAL_ERROR "Set STM32_JPEG_HAL_DIR to the installed CubeH7 HAL driver directory")
+            endif()
+            target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/camera_flow_jpeg.c
+                "${STM32_JPEG_HAL_DIR}/Src/stm32h7xx_hal_jpeg.c")
+            target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE "${STM32_JPEG_HAL_DIR}/Inc")
+            target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CAMERA_FLOW_HW_JPEG=1 HAL_JPEG_MODULE_ENABLED)
+            set_source_files_properties(Core/Src/camera_flow_jpeg.c
+                "${STM32_JPEG_HAL_DIR}/Src/stm32h7xx_hal_jpeg.c" PROPERTIES COMPILE_OPTIONS "-O2")
+        endif()
+    endif()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         Core/Src/camera_snapshot.c Core/Src/camera_jpeg.c Core/Src/camera_sccb.c
         Core/Src/camera_avi.c Core/Src/camera_bgr.c Core/Src/camera_h264.c
         Core/Src/camera_mp4.c Drivers/Camera/tjpgd/tjpgd.c)
     target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE Drivers/Camera/ov2640 Drivers/Camera/tjpgd Drivers/Camera/minih264)
     set_source_files_properties(Core/Src/camera_h264.c PROPERTIES COMPILE_OPTIONS "-O2")
+    set_source_files_properties(Core/Src/camera_snapshot.c Core/Src/camera_jpeg.c
+        Core/Src/camera_avi.c Core/Src/camera_mp4.c Core/Src/camera_bgr.c
+        Drivers/Camera/tjpgd/tjpgd.c PROPERTIES COMPILE_OPTIONS "-O2")
+endif()
+if(CAMERA_FLOW_MAVLINK)
+    if(NOT APP_CAMERA_ENABLED OR NOT CAMERA_FLOW_BENCH OR BOARD_CAMERA_TEST
+        OR NOT CAMERA_FLOW_FX_X100 MATCHES "^[1-9][0-9]*$"
+        OR NOT CAMERA_FLOW_FY_X100 MATCHES "^[1-9][0-9]*$")
+        message(FATAL_ERROR "Camera flow telemetry needs the application bench tracker and calibrated positive FX/FY")
+    endif()
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CAMERA_FLOW_MAVLINK=1
+        CAMERA_FLOW_FX_X100=${CAMERA_FLOW_FX_X100} CAMERA_FLOW_FY_X100=${CAMERA_FLOW_FY_X100})
 endif()
 if(BOARD_BENCH_TEST)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/board_bench.c)
@@ -111,6 +148,7 @@ set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/Core/Src/audio_player.c
     ${CMAKE_SOURCE_DIR}/Core/Src/mk_app.c
+    ${CMAKE_SOURCE_DIR}/Core/Src/patrol.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_raw.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_nmea.c
     ${CMAKE_SOURCE_DIR}/Core/Src/gps_input.c

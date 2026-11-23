@@ -1,5 +1,86 @@
 # H743 camera recording
 
+## Invalid thermal frame and false camera-timeout fix
+
+A live failure reproduced CAMERA_VERIFY (stage 8), CAMERA_TIMEOUT (error 4)
+with normal-camera file/close results zero and all 759188 recorded JPEG bytes
+verified. The thermal report showed last_error=-8 (vendor frame validation),
+only 3 saved thermal frames and no SD error. The session coordinator had
+aborted both workers on that one thermal error, and normal-camera finalization
+then converted the peer failure into a misleading local timeout.
+
+Thermal capture now drops/retries invalid reads within the shared deadline;
+eight consecutive read errors still fail that thermal recording explicitly.
+Once both cameras have started, a peer failure no longer truncates a healthy
+stream. Preparation still aborts if either camera cannot become ready.
+Each worker reports its own result; final Bluetooth output identifies which
+stream failed. Camera errors preserve the stage where the actual failure
+occurred rather than reporting the later verification stage.
+
+The fix is flashed as build/drone-camera-peer-error-fixed.elf. A controlled
+single -8 injection during thermal acquisition exercised recovery: VIDEO001.AVI,
+640x480, 102 frames/10000 ms (10.2 FPS), 2151579 sample bytes verified;
+T0004.AVI, 11 valid frames/10000 ms. One thermal read error/retry was counted,
+both success bits completed, no session failure and no open files. This was
+a deliberately injected invalid-frame return, not an additional natural fault.
+Evidence: build/camera-verify-error-live.txt,
+build/camera-peer-error-one-bad-frame.txt and
+build/camera-peer-error-recovery-result.txt. Host tests cover independent
+post-start failure handling, and Debug/Release/camera-only builds pass.
+
+
+## VGA direct-MJPEG mode (hardware validated)
+
+The user selected higher normal-camera resolution/FPS with VLC-compatible
+AVI rather than direct Windows Media Player MP4 compatibility. The default
+`CAMERA_FAST_MJPEG=ON` profile now configures a native SVGA sensor window
+and downsizes to 640x480 JPEG, storing compressed camera frames directly
+in VIDEOxxx.AVI. It avoids JPEG decoding, BGR conversion and software H.264
+encoding. The 128 KiB capture bound and complete-frame validation remain.
+The sensor window uses Espressif's Apache-licensed SVGA table:
+https://github.com/espressif/esp32-camera/blob/master/sensors/private_include/ov2640_settings.h
+
+The software pacing target is 67 ms per frame (up to about 15 FPS), replacing
+250 ms (4 FPS). The combined hardware test achieved 95 VGA frames over
+10000 ms: 9.5 FPS with thermal recording active. This is the measured result;
+15 FPS remains a pacing target rather than a guaranteed rate. JPEG quality, sensor CLKRC,
+DVP divider, CPU/peripheral clocks and thermal settings are preserved.
+`record` still starts both cameras for the shared 10-second capture window.
+The index capacity is 300 frames; mutually exclusive AVI/MP4 container state
+shares stack storage. Capture/decoding/encoding/write/pacing timing totals
+and the observed FPS are available in the report/final Bluetooth message.
+
+Build `CAMERA_FAST_MJPEG=OFF` for the earlier 320x240 H.264 MP4 default.
+The source changes preserve unrelated pending patrol/UWB work. The isolated
+board-test image `build/drone-camera-fast-vga.elf` uses the last committed
+application plus these camera changes. The later hardware validation used
+the VGA firmware already running on the board, not a reflash of that isolated
+image. Its source
+snapshot is build/camera-fast-validation-src. Do not confuse a successful
+host fixture with an actual sensor recording.
+
+Validation: normal and isolated builds pass. A host fixture exercises the
+actual JPEG parser and AVI writer with 150 VGA JPEG frames, verifies the
+10-second stream timing, index, frame payloads and 300-frame limit, and
+FFmpeg decodes every frame. Thermal AVI tests and command/session tests pass.
+
+
+### Combined hardware recording result
+
+VIDEO000.AVI: 640x480, 95 frames over 10000 ms (9.5 FPS), 2059766 JPEG payload
+bytes verified by SD readback. Capture accounted for 4507 ms, writes/hash
+work 5326 ms and pacing 207 ms. Camera, file close and unmount errors were zero.
+T0012.AVI: 12 thermal frames over the same 10000 ms window, no sensor/storage
+errors. The actual thermal header buffer prepared for the final write has
+12 frames, scale 1000, rate 1200, implying a 10.0-second playback timeline.
+Both files were closed with no open storage handles; GPS kept receiving.
+Evidence: build/camera-vga-both-record-result.txt,
+build/camera-vga-thermal-header.bin and build/camera-vga-record-final-state.txt.
+
+An earlier first-write NACK at sensor startup cleared after an address-only
+probe; ID 0x2642 and subsequent ordinary startups/captures succeeded. Its
+original trigger is not established. This does not establish a short.
+
 ## Bluetooth recording command
 
 Normal firmware waits for `record` over Bluetooth UART7 (115200, 8N1).

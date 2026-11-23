@@ -9,6 +9,7 @@ typedef struct {
     char filename[16];
     uint32_t probe_attempts, probe_hal, probe_i2c_error, probe_isr, probe_scl, probe_sda;
     uint32_t probe_recoveries, probe_previous_error, probe_recovery_lines;
+    uint32_t clip_read_errors;
 } ThermalReport;
 extern volatile ThermalReport thermal_report;
 

@@ -4,6 +4,7 @@
 #include "camera_user_table.h"
 #include "camera_avi.h"
 #include "camera_bgr.h"
+#include "camera_flow.h"
 #include "camera_h264.h"
 #include "camera_mp4.h"
 #include "app_storage.h"
@@ -38,8 +39,8 @@ volatile uint32_t camera_snapshot_video_frames = 40;
 volatile uint32_t camera_snapshot_clockrc = 0x80U;
 volatile uint32_t camera_snapshot_selftest_pattern = 0x5AU;
 volatile uint32_t camera_snapshot_dcmi_polarities = 4;
-volatile uint32_t camera_snapshot_video_uncompressed = 1;
-volatile uint32_t camera_snapshot_video_mp4 = 1;
+volatile uint32_t camera_snapshot_video_uncompressed = CAMERA_FAST_MJPEG ? 0U : 1U;
+volatile uint32_t camera_snapshot_video_mp4 = CAMERA_FAST_MJPEG ? 0U : 1U;
 volatile uint32_t camera_snapshot_export_recording;
 /* AXI SRAM is accessible to both DCMI DMA1 and SDMMC1 IDMA. DTCM is not. */
 static uint32_t capture[CAPTURE_BYTES / 4]
@@ -52,7 +53,9 @@ static uint8_t video_bgr[320U * 240U * 3U]
     __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static FIL camera_file __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static volatile uint32_t frame_done, capture_error;
+static volatile CameraSnapshotReport *volatile camera_capture_report = &camera_snapshot;
 static bool commanded_recording;
+static uint16_t output_width=320, output_height=240;
 
 static void Log(const char *message)
 {
@@ -65,21 +68,27 @@ static void DelayMs(uint32_t milliseconds)
     osDelay(ticks ? ticks : 1);
 }
 
+static bool SetFailure(volatile CameraSnapshotReport *report, CameraFailure failure)
+{
+    report->failure_stage = report->stage;
+    report->failure = failure;
+    return false;
+}
+
 static bool Fail(CameraFailure failure)
 {
-    camera_snapshot.failure = failure;
-    return false;
+    return SetFailure(&camera_snapshot, failure);
 }
 
 static bool Register(uint8_t reg, uint8_t *value, bool read)
 {
-    camera_snapshot.failed_reg = reg;
+    camera_capture_report->failed_reg = reg;
     if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK)
-        return Fail(CAMERA_I2C);
+        return SetFailure(camera_capture_report, CAMERA_I2C);
     /* Preserve the thermal camera's CubeMX 400 kHz bus configuration. Only
      * this STOP-delimited SCCB transaction uses the proven 100 kHz timing. */
     uint32_t saved_timing = hi2c1.Instance->TIMINGR;
-    if (!camera_snapshot.software_sccb) {
+    if (!camera_capture_report->software_sccb) {
         __HAL_I2C_DISABLE(&hi2c1);
         hi2c1.Instance->TIMINGR = 0x20B182BE;
         __HAL_I2C_ENABLE(&hi2c1);
@@ -88,9 +97,9 @@ static bool Register(uint8_t reg, uint8_t *value, bool read)
      * Writes are one uninterrupted register/value transfer, avoiding a
      * memory-write RELOAD pause between the two bytes. */
     HAL_StatusTypeDef status;
-    if (camera_snapshot.software_sccb) {
+    if (camera_capture_report->software_sccb) {
         status = CameraSCCB_Register(reg, value, read);
-        camera_snapshot.sccb_nacks = camera_sccb_nacks;
+        camera_capture_report->sccb_nacks = camera_sccb_nacks;
     } else if (read) {
         status = HAL_I2C_Master_Transmit(&hi2c1, CAMERA_ADDRESS, &reg, 1, 100);
         if (status == HAL_OK)
@@ -99,27 +108,27 @@ static bool Register(uint8_t reg, uint8_t *value, bool read)
         uint8_t command[2] = {reg, *value};
         status = HAL_I2C_Master_Transmit(&hi2c1, CAMERA_ADDRESS, command, 2, 100);
     }
-    camera_snapshot.hal_status = status;
-    camera_snapshot.i2c_error = camera_snapshot.software_sccb
+    camera_capture_report->hal_status = status;
+    camera_capture_report->i2c_error = camera_capture_report->software_sccb
         ? (status == HAL_OK ? 0U : HAL_I2C_ERROR_TIMEOUT) : HAL_I2C_GetError(&hi2c1);
-    if (camera_snapshot.trace_count < 32U) {
-        unsigned index = camera_snapshot.trace_count;
-        camera_snapshot.trace[index][0] = reg;
-        camera_snapshot.trace[index][1] = status == HAL_OK ? *value : 0xFFFFFFFFU;
-        camera_snapshot.trace[index][2] = read;
-        camera_snapshot.trace[index][3] = status;
-        camera_snapshot.trace[index][4] = camera_snapshot.i2c_error;
-        camera_snapshot.trace[index][5] = (GPIOB->IDR >> 8) & 3U;
-        camera_snapshot.trace_count = index + 1U;
+    if (camera_capture_report->trace_count < 32U) {
+        unsigned index = camera_capture_report->trace_count;
+        camera_capture_report->trace[index][0] = reg;
+        camera_capture_report->trace[index][1] = status == HAL_OK ? *value : 0xFFFFFFFFU;
+        camera_capture_report->trace[index][2] = read;
+        camera_capture_report->trace[index][3] = status;
+        camera_capture_report->trace[index][4] = camera_capture_report->i2c_error;
+        camera_capture_report->trace[index][5] = (GPIOB->IDR >> 8) & 3U;
+        camera_capture_report->trace_count = index + 1U;
     }
-    if (!camera_snapshot.software_sccb) {
+    if (!camera_capture_report->software_sccb) {
         __HAL_I2C_DISABLE(&hi2c1);
         hi2c1.Instance->TIMINGR = saved_timing;
         __HAL_I2C_ENABLE(&hi2c1);
     }
     (void)osMutexRelease(i2c1MutexHandle);
     if (status == HAL_OK && !read) DelayMs(1);
-    return status == HAL_OK ? true : Fail(CAMERA_I2C);
+    return status == HAL_OK ? true : SetFailure(camera_capture_report, CAMERA_I2C);
 }
 
 static bool Write(uint8_t reg, uint8_t value)
@@ -131,10 +140,10 @@ static bool Table(const uint8_t (*table)[2])
 {
     for (unsigned i = 0; table[i][0] || table[i][1]; ++i) {
         if (!Write(table[i][0], table[i][1])) return false;
-        if (camera_snapshot.probe_registers && table == ov2640_settings_cif && i < 2U) {
+        if (camera_capture_report->probe_registers && table == ov2640_settings_cif && i < 2U) {
             uint8_t bank = 0;
             if (!Register(0xFF, &bank, true)) return false;
-            camera_snapshot.bank_readback[i + 1U] = bank;
+            camera_capture_report->bank_readback[i + 1U] = bank;
         }
     }
     return true;
@@ -148,9 +157,9 @@ static void ObserveOutputs(unsigned sample)
      * from asynchronous sampling or claim analog signal quality. */
     while (HAL_GetTick() - started < 50U) {
         uint32_t a = GPIOA->IDR, g = GPIOG->IDR;
-        if ((a ^ last_a) & GPIO_PIN_6) ++camera_snapshot.pclk_edges[sample];
-        if ((a ^ last_a) & GPIO_PIN_4) ++camera_snapshot.href_edges[sample];
-        if ((g ^ last_g) & GPIO_PIN_9) ++camera_snapshot.vsync_edges[sample];
+        if ((a ^ last_a) & GPIO_PIN_6) ++camera_capture_report->pclk_edges[sample];
+        if ((a ^ last_a) & GPIO_PIN_4) ++camera_capture_report->href_edges[sample];
+        if ((g ^ last_g) & GPIO_PIN_9) ++camera_capture_report->vsync_edges[sample];
         last_a = a; last_g = g;
     }
 }
@@ -423,13 +432,13 @@ static bool ProbeDCMIInput(void)
 
 static bool InitSensor(void)
 {
-    camera_snapshot.stage = CAMERA_SENSOR;
+    camera_capture_report->stage = CAMERA_SENSOR;
     /* Bus reconfiguration is restricted to the isolated diagnostic build. */
 #if BOARD_CAMERA_TEST
-    if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK) return Fail(CAMERA_I2C);
+    if (osMutexAcquire(i2c1MutexHandle, osWaitForever) != osOK) return SetFailure(camera_capture_report, CAMERA_I2C);
     HAL_StatusTypeDef bus_status = HAL_I2C_DeInit(&hi2c1);
     if (bus_status == HAL_OK) {
-        if (camera_snapshot.software_sccb) bus_status = CameraSCCB_Init() ? HAL_OK : HAL_ERROR;
+        if (camera_capture_report->software_sccb) bus_status = CameraSCCB_Init() ? HAL_OK : HAL_ERROR;
         else {
             hi2c1.Init.Timing = 0x20B182BE;
             bus_status = HAL_I2C_Init(&hi2c1);
@@ -437,11 +446,11 @@ static bool InitSensor(void)
             if (bus_status == HAL_OK) bus_status = HAL_I2CEx_ConfigDigitalFilter(&hi2c1, 0);
         }
     }
-    camera_snapshot.hal_status = bus_status;
+    camera_capture_report->hal_status = bus_status;
     (void)osMutexRelease(i2c1MutexHandle);
-    if (bus_status != HAL_OK) return Fail(CAMERA_I2C);
+    if (bus_status != HAL_OK) return SetFailure(camera_capture_report, CAMERA_I2C);
 #else
-    if (camera_snapshot.software_sccb) return Fail(CAMERA_I2C);
+    if (camera_capture_report->software_sccb) return SetFailure(camera_capture_report, CAMERA_I2C);
 #endif
     HAL_GPIO_WritePin(CAM_PWDN_GPIO_Port, CAM_PWDN_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(CAM_RESET_N_GPIO_Port, CAM_RESET_N_Pin, GPIO_PIN_RESET);
@@ -454,35 +463,35 @@ static bool InitSensor(void)
     uint8_t high, low;
     if (!Write(0xFF, 1) || !Register(0x0A, &high, true) ||
         !Register(0x0B, &low, true)) return false;
-    camera_snapshot.sensor_id = ((uint32_t)high << 8) | low;
+    camera_capture_report->sensor_id = ((uint32_t)high << 8) | low;
     if (high != 0x26 || (low != 0x41 && low != 0x42))
-        return Fail(CAMERA_SENSOR_ID);
+        return SetFailure(camera_capture_report, CAMERA_SENSOR_ID);
     Log("CAMERA: OV2640 detected\r\n");
-    camera_snapshot.stage = CAMERA_CONFIGURE;
+    camera_capture_report->stage = CAMERA_CONFIGURE;
     if (!Write(0x12, 0x80)) return false;
     DelayMs(20);
-    if (camera_snapshot.probe_registers == 2U) return ProbeOtherRegisters();
-    if ((camera_snapshot.probe_registers >= 3U && camera_snapshot.probe_registers <= 5U) || camera_snapshot.probe_registers == 7U) {
+    if (camera_capture_report->probe_registers == 2U) return ProbeOtherRegisters();
+    if ((camera_capture_report->probe_registers >= 3U && camera_capture_report->probe_registers <= 5U) || camera_capture_report->probe_registers == 7U) {
         /* This reference outputs RGB565 at 480x272, not our 320x240 JPEG.
          * Test configuration/activity only; never pass it to JPEG capture. */
-        unsigned first = camera_snapshot.probe_registers >= 4U ? 3U : 0U;
+        unsigned first = camera_capture_report->probe_registers >= 4U ? 3U : 0U;
         for (unsigned i = first; i < sizeof(camera_user_480x272) / sizeof(camera_user_480x272[0]); ++i)
             if (!Write(camera_user_480x272[i][0], camera_user_480x272[i][1])) return false;
         DelayMs(500);
         ObserveOutputs(1);
-        if (camera_snapshot.probe_registers == 5U) return ProbeOutputs();
-        if (camera_snapshot.probe_registers == 7U) return ProbeRawCapture();
+        if (camera_capture_report->probe_registers == 5U) return ProbeOutputs();
+        if (camera_capture_report->probe_registers == 7U) return ProbeRawCapture();
         return true;
     }
-    if (camera_snapshot.probe_registers) {
+    if (camera_capture_report->probe_registers) {
         uint8_t bank = 0;
         if (!Register(0xFF, &bank, true)) return false;
-        camera_snapshot.bank_readback[0] = bank;
+        camera_capture_report->bank_readback[0] = bank;
     }
     const uint8_t (*initial)[2] = ov2640_settings_cif;
-    if (camera_snapshot.skip_dsp_prefix) initial += 3;
+    if (camera_capture_report->skip_dsp_prefix) initial += 3;
     if (!Table(initial) || !Write(0xFF, 0) || !Write(0x05, 1) ||
-        !Table(ov2640_settings_to_cif)) return false;
+        !Table(output_width > 400 ? ov2640_settings_to_svga : ov2640_settings_to_cif)) return false;
     /* Same CIF window/scaling sequence as the Espressif driver: 400x296
      * sensor window, downscaled to QVGA 320x240; JPEG DVP divider 8. */
     static const uint8_t qvga[][2] = {
@@ -490,7 +499,13 @@ static bool InitSensor(void)
         {0x57,0}, {0x5A,80}, {0x5B,60}, {0x5C,0},
         {0xFF,1}, {0x11,0}, {0xFF,0}, {0xD3,8}, {0x05,0}, {0,0}
     };
-    if (!Table(qvga)) return false;
+    /* Native SVGA sensor window (800x600), DSP output VGA 640x480. */
+    static const uint8_t vga[][2] = {
+        {0xFF,0}, {0x51,200}, {0x52,150}, {0x53,0}, {0x54,0}, {0x55,0},
+        {0x57,0}, {0x5A,160}, {0x5B,120}, {0x5C,0},
+        {0xFF,1}, {0x11,0}, {0xFF,0}, {0xD3,8}, {0x05,0}, {0,0}
+    };
+    if (!Table(output_width > 400 ? vga : qvga)) return false;
     if (camera_snapshot_clockrc <= 0xFFU &&
         (!Write(0xFF, 1) || !Write(0x11, (uint8_t)camera_snapshot_clockrc) || !Write(0xFF, 0))) return false;
     /* Espressif's table ties HREF to VSYNC. STM32 DCMI needs the separate
@@ -504,7 +519,7 @@ static bool InitSensor(void)
 void HAL_DCMI_FrameEventCallback(DCMI_HandleTypeDef *handle)
 {
     if (handle != &hdcmi) return;
-    ++camera_snapshot.frames;
+    ++camera_capture_report->frames;
     frame_done = 1;
     if ((handle->Instance->CR & DCMI_CR_CM) == DCMI_MODE_CONTINUOUS)
         __HAL_DCMI_ENABLE_IT(handle, DCMI_IT_FRAME);
@@ -512,19 +527,19 @@ void HAL_DCMI_FrameEventCallback(DCMI_HandleTypeDef *handle)
 
 void HAL_DCMI_VsyncEventCallback(DCMI_HandleTypeDef *handle)
 {
-    if (handle == &hdcmi) ++camera_snapshot.vsyncs;
+    if (handle == &hdcmi) ++camera_capture_report->vsyncs;
 }
 
 void HAL_DCMI_ErrorCallback(DCMI_HandleTypeDef *handle)
 {
     if (handle != &hdcmi) return;
-    camera_snapshot.dcmi_error = HAL_DCMI_GetError(handle);
+    camera_capture_report->dcmi_error = HAL_DCMI_GetError(handle);
     capture_error = 1;
 }
 
-static bool Capture(void)
+static bool Capture(uint32_t timeout_ms)
 {
-    camera_snapshot.stage = CAMERA_CAPTURE;
+    camera_capture_report->stage = CAMERA_CAPTURE;
     memset(capture, 0, sizeof(capture));
     frame_done = capture_error = 0;
     uint32_t polarities = camera_snapshot_dcmi_polarities;
@@ -533,28 +548,30 @@ static bool Capture(void)
     hdcmi.Init.VSPolarity = (polarities & 4U) ? DCMI_VSPOLARITY_LOW : DCMI_VSPOLARITY_HIGH;
     /* Snapshot completion disables error/vsync interrupts, and this HAL's
      * Stop() does not clear a previous ErrorCode. Reinitialize for retries. */
-    camera_snapshot.hal_status = HAL_DCMI_Init(&hdcmi);
-    if (camera_snapshot.hal_status != HAL_OK) return Fail(CAMERA_DMA);
+    camera_capture_report->hal_status = HAL_DCMI_Init(&hdcmi);
+    if (camera_capture_report->hal_status != HAL_OK) return SetFailure(camera_capture_report, CAMERA_DMA);
     /* Direct mode prevents a partially filled DMA FIFO being mistaken for
      * captured bytes at the variable-length JPEG frame boundary. */
-    if (HAL_DMA_DeInit(hdcmi.DMA_Handle) != HAL_OK) return Fail(CAMERA_DMA);
+    if (HAL_DMA_DeInit(hdcmi.DMA_Handle) != HAL_OK) return SetFailure(camera_capture_report, CAMERA_DMA);
     hdcmi.DMA_Handle->Init.FIFOMode = DMA_FIFOMODE_DISABLE;
     hdcmi.DMA_Handle->Init.MemBurst = DMA_MBURST_SINGLE;
-    if (HAL_DMA_Init(hdcmi.DMA_Handle) != HAL_OK) return Fail(CAMERA_DMA);
+    if (HAL_DMA_Init(hdcmi.DMA_Handle) != HAL_OK) return SetFailure(camera_capture_report, CAMERA_DMA);
     __HAL_DCMI_CLEAR_FLAG(&hdcmi, DCMI_FLAG_FRAMERI | DCMI_FLAG_OVRRI |
                                 DCMI_FLAG_ERRRI | DCMI_FLAG_VSYNCRI);
     /* This HAL normally enables FRAME only after DMA fills its requested
      * length. A JPEG is shorter than the buffer, so enable FRAME explicitly. */
     __HAL_DCMI_ENABLE_IT(&hdcmi, DCMI_IT_FRAME);
-    camera_snapshot.hal_status = HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_CONTINUOUS,
+    camera_capture_report->hal_status = HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_CONTINUOUS,
                                                    (uint32_t)capture, CAPTURE_BYTES / 4);
-    if (camera_snapshot.hal_status != HAL_OK) return Fail(CAMERA_DMA);
+    if (camera_capture_report->hal_status != HAL_OK) return SetFailure(camera_capture_report, CAMERA_DMA);
     uint32_t started = HAL_GetTick();
     CameraFailure failure = CAMERA_OK;
     uint32_t checked_bytes = 0;
     while (!capture_error) {
-        if (__HAL_DMA_GET_COUNTER(hdcmi.DMA_Handle) == 0) { failure = CAMERA_OVERFLOW; break; }
-        uint32_t received = CAPTURE_BYTES - __HAL_DMA_GET_COUNTER(hdcmi.DMA_Handle) * 4U;
+        const uint32_t dma_remaining = __HAL_DMA_GET_COUNTER(hdcmi.DMA_Handle);
+        if (dma_remaining > CAPTURE_BYTES / 4U) { failure = CAMERA_DMA; break; }
+        if (dma_remaining == 0U) { failure = CAMERA_OVERFLOW; break; }
+        uint32_t received = CAPTURE_BYTES - dma_remaining * 4U;
         if (received != checked_bytes) {
             size_t offset, bytes;
             uint16_t width, height;
@@ -562,32 +579,37 @@ static bool Capture(void)
             if (CameraJPEG_Find((const uint8_t *)capture, received, &offset, &bytes, &width, &height)) break;
             checked_bytes = received;
         }
-        if (HAL_GetTick() - started >= 3000) { failure = CAMERA_TIMEOUT; break; }
+        if (HAL_GetTick() - started >= timeout_ms) { failure = CAMERA_TIMEOUT; break; }
         DelayMs(1);
     }
     if (capture_error) failure = CAMERA_DMA;
-    camera_snapshot.dcmi_error = HAL_DCMI_GetError(&hdcmi);
-    camera_snapshot.dma_error = HAL_DMA_GetError(hdcmi.DMA_Handle);
+    camera_capture_report->dcmi_error = HAL_DCMI_GetError(&hdcmi);
+    camera_capture_report->dma_error = HAL_DMA_GetError(hdcmi.DMA_Handle);
     uint32_t remaining = __HAL_DMA_GET_COUNTER(hdcmi.DMA_Handle);
-    camera_snapshot.hal_status = HAL_DCMI_Stop(&hdcmi);
+    camera_capture_report->hal_status = HAL_DCMI_Stop(&hdcmi);
     __DSB();
-    if (remaining > CAPTURE_BYTES / 4) return Fail(CAMERA_DMA);
-    camera_snapshot.captured_bytes = CAPTURE_BYTES - remaining * 4;
-    if (remaining == 0) return Fail(CAMERA_OVERFLOW);
-    if (camera_snapshot.hal_status != HAL_OK || camera_snapshot.dcmi_error ||
-        camera_snapshot.dma_error) return Fail(CAMERA_DMA);
-    if (failure != CAMERA_OK) return Fail(failure);
-    camera_snapshot.stage = CAMERA_VALIDATE;
+    if (remaining > CAPTURE_BYTES / 4) return SetFailure(camera_capture_report, CAMERA_DMA);
+    camera_capture_report->captured_bytes = CAPTURE_BYTES - remaining * 4;
+    if (camera_capture_report->hal_status != HAL_OK || camera_capture_report->dcmi_error ||
+        camera_capture_report->dma_error) return SetFailure(camera_capture_report, CAMERA_DMA);
+    if (failure != CAMERA_OK && failure != CAMERA_OVERFLOW) return SetFailure(camera_capture_report, failure);
+    /* Continuous capture can fill the buffer after a complete JPEG arrived
+     * but before the task next runs. Validate the captured bytes after stop. */
+    const bool buffer_full = remaining == 0U || failure == CAMERA_OVERFLOW;
     size_t offset, bytes;
     uint16_t width, height;
-    if (!CameraJPEG_Find((const uint8_t *)capture, camera_snapshot.captured_bytes,
-                         &offset, &bytes, &width, &height)) return Fail(CAMERA_JPEG);
-    camera_snapshot.jpeg_offset = (uint32_t)offset;
-    camera_snapshot.jpeg_bytes = (uint32_t)bytes;
-    camera_snapshot.width = width;
-    camera_snapshot.height = height;
-    if (width != 320 || height != 240) return Fail(CAMERA_JPEG);
-    Log("CAMERA: complete 320x240 JPEG captured in internal SRAM\r\n");
+    if (!CameraJPEG_Find((const uint8_t *)capture, camera_capture_report->captured_bytes,
+                         &offset, &bytes, &width, &height)) {
+        if (buffer_full) return SetFailure(camera_capture_report, CAMERA_OVERFLOW);
+        camera_capture_report->stage = CAMERA_VALIDATE;
+        return SetFailure(camera_capture_report, CAMERA_JPEG);
+    }
+    camera_capture_report->stage = CAMERA_VALIDATE;
+    camera_capture_report->jpeg_offset = (uint32_t)offset;
+    camera_capture_report->jpeg_bytes = (uint32_t)bytes;
+    camera_capture_report->width = width;
+    camera_capture_report->height = height;
+    if (width != output_width || height != output_height) return SetFailure(camera_capture_report, CAMERA_JPEG);
     return true;
 }
 
@@ -705,15 +727,51 @@ static uint32_t Hash(uint32_t hash, const uint8_t *data, uint32_t bytes)
     return hash;
 }
 
+#if CAMERA_FLOW_BENCH
+static void FlowTraceName(char name[20], const char *video_name)
+{
+    snprintf(name, 20, "0:/FLOW%.3s.CSV", video_name + sizeof("0:/VIDEO") - 1U);
+}
+
+static bool WriteFlowTrace(const void *data, size_t bytes)
+{
+    /* Reuse the recorder's SD-accessible buffer. This runs after capture. */
+    if (bytes > IO_BYTES) return false;
+    memcpy(io_buffer, data, bytes);
+    UINT written = 0;
+    return f_write(&camera_file, io_buffer, (UINT)bytes, &written) == FR_OK && written == bytes;
+}
+
+static void SaveFlowTrace(const char *video_name)
+{
+    char name[20];
+    FlowTraceName(name, video_name);
+    bool ok = AppStorage_Open(&camera_file, name, FA_CREATE_NEW | FA_WRITE) == FR_OK;
+    if (ok) {
+        ok = CameraFlow_WriteTrace(WriteFlowTrace);
+        if (AppStorage_Close(&camera_file) != FR_OK) ok = false;
+    }
+    char message[64];
+    snprintf(message, sizeof(message), ok ? "FLOW TRACE saved %s\r\n" : "FLOW TRACE save failed %s\r\n", name);
+    Log(message);
+}
+#endif
+
 static bool RecordVideo(void)
 {
     /* First validated camera frame already exists. Do not create an empty
      * movie when the sensor fails to start. Capture/write sequentially so
      * no external SDRAM or unbounded recording buffer is required. */
-    CameraAVI avi;
-    CameraMP4 mp4;
+    /* Only one container is active. Bound stack use as the index grows. */
+    union { CameraAVI avi; CameraMP4 mp4; } container;
+    CameraAVI *avi=&container.avi;
+    CameraMP4 *mp4=&container.mp4;
     uint32_t hashes[CAMERA_AVI_MAX_FRAMES];
     bool opened = false, mounted = false, ok = false;
+#if CAMERA_FLOW_BENCH
+    const bool measure_flow = !camera_snapshot.video_mp4 && !camera_snapshot.video_uncompressed &&
+        camera_snapshot.probe_registers != 6U && camera_snapshot.width == 640 && camera_snapshot.height == 480;
+#endif
     char filename[20] = {0};
     if (!MountSD()) goto done;
     mounted = true;
@@ -722,6 +780,22 @@ static bool RecordVideo(void)
             ? (camera_snapshot.probe_registers == 6U ? "0:/TEST%03u.MP4" : "0:/VIDEO%03u.MP4")
             : (camera_snapshot.probe_registers == 6U ? "0:/TEST%03u.AVI" : "0:/VIDEO%03u.AVI");
         snprintf(filename, sizeof(filename), format, i);
+#if CAMERA_FLOW_BENCH
+        if (measure_flow) {
+            /* An AVI can be deleted independently of its matching flow trace. */
+            char name[20];
+            FlowTraceName(name, filename);
+            const FRESULT trace_status = AppStorage_Stat(name);
+            if (trace_status == FR_OK) {
+                camera_snapshot.fatfs_result = FR_EXIST;
+                continue;
+            }
+            if (trace_status != FR_NO_FILE) {
+                camera_snapshot.fatfs_result = trace_status;
+                break;
+            }
+        }
+#endif
         camera_snapshot.fatfs_result = AppStorage_Open(&camera_file, filename, FA_CREATE_NEW | FA_WRITE);
         if (camera_snapshot.fatfs_result != FR_EXIST) break;
     }
@@ -729,24 +803,35 @@ static bool RecordVideo(void)
     opened = true;
     for (unsigned i = 0; i < sizeof(filename); ++i) camera_snapshot.filename[i] = filename[i];
     bool started = camera_snapshot.video_mp4
-        ? CameraH264_Init() && CameraMP4_Begin(&mp4, AVIWrite, AVISeek, NULL)
+        ? CameraH264_Init() && CameraMP4_Begin(mp4, AVIWrite, AVISeek, NULL)
         : camera_snapshot.video_uncompressed
-        ? CameraAVI_BeginBGR(&avi, AVIWrite, AVISeek, NULL, 320, 240)
-        : CameraAVI_Begin(&avi, AVIWrite, AVISeek, NULL, 320, 240);
+        ? CameraAVI_BeginBGR(avi, AVIWrite, AVISeek, NULL, camera_snapshot.width, camera_snapshot.height)
+        : CameraAVI_Begin(avi, AVIWrite, AVISeek, NULL, camera_snapshot.width, camera_snapshot.height);
     if (!started) { if (camera_snapshot.failure == CAMERA_OK) Fail(CAMERA_DATA); goto done; }
 #if !BOARD_CAMERA_TEST
     if (commanded_recording && !RecordControl_WaitStart(RECORD_CAMERA)) {
-        Fail(CAMERA_TIMEOUT); goto done;
+        Fail(record_report.failed ? CAMERA_PEER_FAILURE : CAMERA_TIMEOUT); goto done;
     }
 #endif
     uint32_t start = HAL_GetTick();
     bool complete = true;
+#if CAMERA_FLOW_BENCH
+    if (measure_flow) CameraFlow_Begin();
+#endif
     for (uint32_t i = 0; i < camera_snapshot.video_requested; ++i) {
 #if !BOARD_CAMERA_TEST
         if (commanded_recording && !RecordControl_HasTime()) break;
 #endif
         uint32_t frame_start = HAL_GetTick();
-        if ((i || commanded_recording) && camera_snapshot.probe_registers != 6U && !Capture()) { complete = false; break; }
+        if ((i || commanded_recording) && camera_snapshot.probe_registers != 6U && !Capture(3000U)) { complete = false; break; }
+#if CAMERA_FLOW_BENCH
+        uint32_t frame_ready = HAL_GetTick();
+        CameraFlowReference reference = {.imu_age_ms = UINT16_MAX, .tof_age_ms = UINT16_MAX};
+#if !BOARD_CAMERA_TEST
+        if (measure_flow) MAVLink_GetFlowReference(&reference);
+#endif
+#endif
+        camera_snapshot.capture_ms += HAL_GetTick()-frame_start;
 #if !BOARD_CAMERA_TEST
         if (commanded_recording && !RecordControl_HasTime()) break;
 #endif
@@ -755,30 +840,47 @@ static bool RecordVideo(void)
         const uint8_t *data = jpeg;
         uint32_t bytes = camera_snapshot.jpeg_bytes;
         if (camera_snapshot.video_uncompressed || camera_snapshot.video_mp4) {
+            uint32_t decode_start=HAL_GetTick();
             if (!CameraBGR_Decode(jpeg, bytes, video_bgr, 320, 240)) {
                 Fail(CAMERA_JPEG); goto done;
             }
             data = video_bgr; bytes = sizeof(video_bgr);
+            camera_snapshot.decode_ms += HAL_GetTick()-decode_start;
         }
         if (camera_snapshot.video_mp4) {
+            uint32_t encode_start=HAL_GetTick();
             if (!CameraH264_Encode(video_bgr, sizeof(video_bgr), &data, &bytes)) { Fail(CAMERA_JPEG); goto done; }
-            if (!CameraMP4_Frame(&mp4, data, bytes)) { Fail(CAMERA_DATA); goto done; }
-            camera_snapshot.video_frames = mp4.frames;
+            camera_snapshot.encode_ms += HAL_GetTick()-encode_start;
+            uint32_t write_start=HAL_GetTick();
+            if (!CameraMP4_Frame(mp4, data, bytes)) { Fail(CAMERA_DATA); goto done; }
+            camera_snapshot.write_ms += HAL_GetTick()-write_start;
+            camera_snapshot.video_frames = mp4->frames;
         } else {
+            uint32_t write_start=HAL_GetTick();
             hashes[i] = Hash(2166136261U, data, bytes);
-            if (!CameraAVI_Frame(&avi, data, bytes)) goto done;
-            camera_snapshot.video_frames = avi.frames;
+            if (!CameraAVI_Frame(avi, data, bytes)) goto done;
+            camera_snapshot.write_ms += HAL_GetTick()-write_start;
+            camera_snapshot.video_frames = avi->frames;
         }
+#if CAMERA_FLOW_BENCH
+        if (measure_flow) CameraFlow_Offer(jpeg, bytes, frame_start, frame_ready, HAL_GetTick(), &reference);
+#endif
         uint32_t elapsed = HAL_GetTick() - frame_start;
-        if (elapsed < 250U) DelayMs(250U - elapsed);
+        if (elapsed < camera_snapshot.frame_period_ms) {
+            uint32_t delay=camera_snapshot.frame_period_ms-elapsed;
+            DelayMs(delay); camera_snapshot.pace_ms += delay;
+        }
     }
     camera_snapshot.video_duration_ms = HAL_GetTick() - start;
+#if CAMERA_FLOW_BENCH
+    if (measure_flow) CameraFlow_ReportCapture();
+#endif
 #if !BOARD_CAMERA_TEST
     if (commanded_recording) camera_snapshot.video_duration_ms = record_report.duration_ms;
 #endif
     bool finalized = camera_snapshot.video_mp4
-        ? CameraMP4_End(&mp4, camera_snapshot.video_duration_ms)
-        : CameraAVI_End(&avi, camera_snapshot.video_duration_ms);
+        ? CameraMP4_End(mp4, camera_snapshot.video_duration_ms)
+        : CameraAVI_End(avi, camera_snapshot.video_duration_ms);
     if (!finalized) { Fail(CAMERA_FS); goto done; }
     camera_snapshot.fatfs_result = f_sync(&camera_file);
     if (camera_snapshot.fatfs_result != FR_OK) { Fail(CAMERA_FS); goto done; }
@@ -791,13 +893,13 @@ static bool RecordVideo(void)
     camera_snapshot.fatfs_result = AppStorage_Open(&camera_file, filename, FA_READ);
     if (camera_snapshot.fatfs_result != FR_OK) { Fail(CAMERA_FS); goto done; }
     opened = true;
-    uint32_t file_bytes = camera_snapshot.video_mp4 ? mp4.position : avi.position;
-    uint32_t frames = camera_snapshot.video_mp4 ? mp4.frames : avi.frames;
+    uint32_t file_bytes = camera_snapshot.video_mp4 ? mp4->position : avi->position;
+    uint32_t frames = camera_snapshot.video_mp4 ? mp4->frames : avi->frames;
     if (f_size(&camera_file) != file_bytes) { Fail(CAMERA_DATA); goto done; }
     for (uint32_t i = 0; i < frames; ++i) {
-        uint32_t at = camera_snapshot.video_mp4 ? mp4.offsets[i] : 220U + avi.offsets[i] + 8U;
+        uint32_t at = camera_snapshot.video_mp4 ? mp4->offsets[i] : 220U + avi->offsets[i] + 8U;
         if (!AVISeek(NULL, at)) goto done;
-        uint32_t remaining = camera_snapshot.video_mp4 ? mp4.sizes[i] : avi.sizes[i], hash = 2166136261U;
+        uint32_t remaining = camera_snapshot.video_mp4 ? mp4->sizes[i] : avi->sizes[i], hash = 2166136261U;
         while (remaining) {
             UINT count = IOCount(remaining), received = 0;
             camera_snapshot.fatfs_result = f_read(&camera_file, io_buffer, count, &received);
@@ -806,7 +908,7 @@ static bool RecordVideo(void)
             camera_snapshot.bytes_verified += count;
             remaining -= count;
         }
-        if (hash != (camera_snapshot.video_mp4 ? mp4.hashes[i] : hashes[i])) { Fail(CAMERA_DATA); goto done; }
+        if (hash != (camera_snapshot.video_mp4 ? mp4->hashes[i] : hashes[i])) { Fail(CAMERA_DATA); goto done; }
     }
     if ((camera_snapshot.probe_registers == 6U || camera_snapshot_export_recording) && file_bytes <= CAPTURE_BYTES) {
         /* Allow ST-Link to export the actual SD test file for independent
@@ -823,15 +925,15 @@ static bool RecordVideo(void)
         camera_snapshot.captured_bytes = file_bytes;
     }
     ok = complete;
-#if !BOARD_CAMERA_TEST
-    if (commanded_recording && record_report.failed) ok = Fail(CAMERA_TIMEOUT);
-#endif
 done:
     camera_snapshot.sd_error = hsd1.ErrorCode;
     if (opened) {
         camera_snapshot.close_result = AppStorage_Close(&camera_file);
         if (camera_snapshot.close_result != FR_OK) { Fail(CAMERA_FS); ok = false; }
     }
+#if CAMERA_FLOW_BENCH
+    if (ok && measure_flow) SaveFlowTrace(filename);
+#endif
     if (mounted) {
         camera_snapshot.unmount_result = AppStorage_UnmountIfIdle();
         if (camera_snapshot.unmount_result != FR_OK) { Fail(CAMERA_FS); ok = false; }
@@ -839,13 +941,95 @@ done:
     return ok;
 }
 
+#if CAMERA_FLOW_MAVLINK
+static volatile CameraSnapshotReport live_camera_report;
+static struct {
+    uint32_t next_ms, clockrc;
+    unsigned failures;
+    bool ready, fault_reported;
+} live_camera;
+static volatile bool live_camera_active;
+
+static bool LiveCameraProfile(void)
+{
+    return !camera_snapshot_video_mp4 && !camera_snapshot_video_uncompressed &&
+        !camera_snapshot_probe_registers && !camera_snapshot_software_sccb &&
+        !camera_snapshot_skip_dsp_prefix;
+}
+
+static bool InitRecordingSensor(void)
+{
+    const bool live_profile = LiveCameraProfile();
+    const uint32_t clockrc = camera_snapshot_clockrc;
+    if (live_profile && live_camera.ready && live_camera.clockrc == clockrc) {
+        camera_snapshot.sensor_id = live_camera_report.sensor_id;
+        return true;
+    }
+    const bool ok = InitSensor();
+    live_camera.ready = live_profile && ok;
+    live_camera.clockrc = clockrc;
+    if (live_camera.ready) live_camera_report.sensor_id = camera_snapshot.sensor_id;
+    return ok;
+}
+
+static void StreamCamera(void)
+{
+    const uint32_t now = HAL_GetTick();
+    if ((int32_t)(now - live_camera.next_ms) < 0) return;
+    live_camera.next_ms = now + 67U;
+    const uint32_t clockrc = camera_snapshot_clockrc;
+    if (live_camera.clockrc != clockrc) live_camera.ready = false;
+    output_width = 640U;
+    output_height = 480U;
+    camera_capture_report = &live_camera_report;
+    if (!live_camera.ready) {
+        memset((void *)&live_camera_report, 0, sizeof(live_camera_report));
+        live_camera.ready = InitSensor();
+        live_camera.clockrc = clockrc;
+    }
+    const bool captured = live_camera.ready && Capture(180U);
+    camera_capture_report = &camera_snapshot;
+    if (!captured) {
+        if (!live_camera.ready || ++live_camera.failures >= 3U) {
+            live_camera_active = false;
+            live_camera.ready = false;
+            live_camera.failures = 0U;
+            live_camera.next_ms = HAL_GetTick() + 1000U;
+            if (!live_camera.fault_reported) {
+                char message[96];
+                snprintf(message, sizeof(message), "CAMERA: live capture failed stage=%lu error=%lu; retrying\r\n",
+                         (unsigned long)live_camera_report.failure_stage,
+                         (unsigned long)live_camera_report.failure);
+                Log(message);
+                live_camera.fault_reported = true;
+            }
+        }
+        return;
+    }
+    const uint32_t captured_ms = HAL_GetTick();
+    CameraFlowReference reference;
+    MAVLink_GetFlowReference(&reference);
+    CameraFlow_Stream((const uint8_t *)capture + live_camera_report.jpeg_offset,
+                      live_camera_report.jpeg_bytes, captured_ms, &reference);
+    if (!live_camera_active)
+        Log("FLOW: live camera active; send record or record cam to save video\r\n");
+    live_camera_active = true;
+    live_camera.failures = 0U;
+    live_camera.fault_reported = false;
+}
+#endif
+
 int CameraSnapshot_FormatStatus(char *buffer, size_t size)
 {
+#if CAMERA_FLOW_MAVLINK
+    if (live_camera_active && !camera_snapshot.done && !camera_snapshot.video_requested)
+        return snprintf(buffer,size,"CAM: live flow; send record or record cam to save video\r\n");
+#endif
     if (!camera_snapshot.done && !camera_snapshot.video_requested)
-        return snprintf(buffer,size,"CAM: idle; send record\r\n");
+        return snprintf(buffer,size,"CAM: idle; send record or record cam\r\n");
     if (camera_snapshot.done && camera_snapshot.failure)
         return snprintf(buffer,size,"CAM: failed stage=%lu error=%lu\r\n",
-            (unsigned long)camera_snapshot.stage,(unsigned long)camera_snapshot.failure);
+            (unsigned long)camera_snapshot.failure_stage,(unsigned long)camera_snapshot.failure);
     if (camera_snapshot.done)
         return snprintf(buffer,size,"CAM: saved %s frames=%lu\r\n",
             (const char *)camera_snapshot.filename,(unsigned long)camera_snapshot.video_frames);
@@ -881,6 +1065,13 @@ void CameraSnapshot_Task(void *argument)
             camera_snapshot.probe_registers = camera_snapshot_probe_registers;
             camera_snapshot.video_uncompressed = camera_snapshot_video_uncompressed != 0;
             camera_snapshot.video_mp4 = camera_snapshot_video_mp4 != 0;
+            bool direct_jpeg=!camera_snapshot.video_mp4 && !camera_snapshot.video_uncompressed;
+            output_width=direct_jpeg ? 640U : 320U;
+            output_height=direct_jpeg ? 480U : 240U;
+            camera_snapshot.frame_period_ms=direct_jpeg ? 67U : 250U;
+#if CAMERA_FLOW_BENCH
+            if (direct_jpeg) camera_snapshot.frame_period_ms = 50U;
+#endif
             camera_snapshot.video_requested = camera_snapshot_video_frames > CAMERA_AVI_MAX_FRAMES
                 ? CAMERA_AVI_MAX_FRAMES : camera_snapshot_video_frames;
             for (unsigned i = 0; i < 3U; ++i) camera_snapshot.bank_readback[i] = 0xFFFFFFFFU;
@@ -889,7 +1080,7 @@ void CameraSnapshot_Task(void *argument)
                     ? "\r\nCAMERA: H.264 MP4 to SD; internal SRAM\r\n"
                     : camera_snapshot.video_uncompressed
                     ? "\r\nCAMERA: uncompressed RGB24 AVI to SD; internal SRAM\r\n"
-                    : "\r\nCAMERA: MJPEG AVI to SD; internal SRAM\r\n")
+                    : "\r\nCAMERA: direct 640x480 MJPEG AVI to SD\r\n")
                 : "\r\nCAMERA: single JPEG to SD; internal SRAM\r\n");
             bool ok;
             if (SCB->CCR & SCB_CCR_DC_Msk) ok = Fail(CAMERA_CACHE_ENABLED);
@@ -909,9 +1100,18 @@ void CameraSnapshot_Task(void *argument)
                     ok = camera_snapshot.sd_requested && camera_snapshot.video_requested && RecordVideo();
                 } else Fail(CAMERA_JPEG);
             }
-            else ok = InitSensor() && (((camera_snapshot.probe_registers >= 2U && camera_snapshot.probe_registers <= 5U) || camera_snapshot.probe_registers == 7U) ||
-                (Capture() && (!camera_snapshot.sd_requested ||
-                    (camera_snapshot.video_requested ? RecordVideo() : Save()))));
+            else {
+#if CAMERA_FLOW_MAVLINK
+                const bool sensor_ready = InitRecordingSensor();
+#else
+                const bool sensor_ready = InitSensor();
+#endif
+                ok = sensor_ready &&
+                    (((camera_snapshot.probe_registers >= 2U && camera_snapshot.probe_registers <= 5U) ||
+                       camera_snapshot.probe_registers == 7U) ||
+                     (Capture(3000U) && (!camera_snapshot.sd_requested ||
+                      (camera_snapshot.video_requested ? RecordVideo() : Save()))));
+            }
             if (ok) camera_snapshot.stage = CAMERA_DONE;
             camera_snapshot.done = 1;
             char message[192];
@@ -921,20 +1121,25 @@ void CameraSnapshot_Task(void *argument)
                 ? snprintf(message, sizeof(message), "CAMERA: SYNTHETIC SD TEST PASS %s frames=%lu; NOT camera video\r\n",
                            (const char *)camera_snapshot.filename, (unsigned long)camera_snapshot.video_frames)
                 : ok && camera_snapshot.sd_requested && camera_snapshot.video_requested
-                ? snprintf(message, sizeof(message), "CAMERA: VIDEO PASS %s frames=%lu duration=%lums; saved and verified\r\n",
-                           (const char *)camera_snapshot.filename, (unsigned long)camera_snapshot.video_frames,
-                           (unsigned long)camera_snapshot.video_duration_ms)
+                ? snprintf(message, sizeof(message), "CAMERA: VIDEO PASS %s %lux%lu frames=%lu duration=%lums FPS=%lu.%lu; saved and verified\r\n",
+                           (const char *)camera_snapshot.filename,
+                           (unsigned long)camera_snapshot.width,(unsigned long)camera_snapshot.height,
+                           (unsigned long)camera_snapshot.video_frames,(unsigned long)camera_snapshot.video_duration_ms,
+                           (unsigned long)(camera_snapshot.video_frames*1000U/camera_snapshot.video_duration_ms),
+                           (unsigned long)((camera_snapshot.video_frames*10000U/camera_snapshot.video_duration_ms)%10U))
                 : ok && !camera_snapshot.sd_requested
                 ? snprintf(message, sizeof(message), "CAMERA: CAPTURE PASS ID=0x%04lX JPEG=%lu bytes; SD not accessed\r\n",
                            (unsigned long)camera_snapshot.sensor_id, (unsigned long)camera_snapshot.jpeg_bytes)
                 : ok
                 ? snprintf(message, sizeof(message), "CAMERA: PASS %s (%lu bytes saved and verified); file closed\r\n",
                            (const char *)camera_snapshot.filename, (unsigned long)camera_snapshot.jpeg_bytes)
-                : snprintf(message, sizeof(message), "CAMERA: FAIL stage=%lu error=%lu ID=0x%04lX I2C=0x%lX DCMI=0x%lX DMA=0x%lX FS=%lu\r\n",
-                           (unsigned long)camera_snapshot.stage, (unsigned long)camera_snapshot.failure,
+                : snprintf(message, sizeof(message), "CAMERA: FAIL stage=%lu error=%lu ID=0x%04lX I2C=0x%lX DCMI=0x%lX DMA=0x%lX FS=%lu captured=%lu saved=%lu\r\n",
+                           (unsigned long)camera_snapshot.failure_stage, (unsigned long)camera_snapshot.failure,
                            (unsigned long)camera_snapshot.sensor_id, (unsigned long)camera_snapshot.i2c_error,
                            (unsigned long)camera_snapshot.dcmi_error, (unsigned long)camera_snapshot.dma_error,
-                           (unsigned long)camera_snapshot.fatfs_result);
+                           (unsigned long)camera_snapshot.fatfs_result,
+                           (unsigned long)camera_snapshot.captured_bytes,
+                           (unsigned long)camera_snapshot.video_frames);
             if (length > 0 && (size_t)length < sizeof(message)) Log(message);
             if (!ok && camera_snapshot.failure == CAMERA_I2C)
                 Log("CAMERA: SCCB transfer failed; software, wiring, power and module clock remain unverified\r\n");
@@ -943,6 +1148,13 @@ void CameraSnapshot_Task(void *argument)
 #endif
             commanded_recording = false;
         }
+#if CAMERA_FLOW_MAVLINK
+        else if (LiveCameraProfile() && !(SCB->CCR & SCB_CCR_DC_Msk)) {
+            StreamCamera();
+            DelayMs(5);
+            continue;
+        }
+#endif
         DelayMs(20);
     }
 }

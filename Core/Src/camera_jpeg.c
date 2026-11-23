@@ -1,16 +1,12 @@
 #include "camera_jpeg.h"
 
-int CameraJPEG_Find(const uint8_t *data, size_t length, size_t *offset,
-                    size_t *size, uint16_t *width, uint16_t *height)
+/* The caller has already found the start-of-image marker. */
+static int ParseJPEG(const uint8_t *data, size_t length, size_t *size,
+                     uint16_t *width, uint16_t *height)
 {
-    if (!data || !offset || !size || !width || !height) return 0;
-    size_t start = 0;
-    while (start + 1 < length && !(data[start] == 0xFF && data[start + 1] == 0xD8))
-        ++start;
-    if (start + 1 >= length) return 0;
     uint16_t w = 0, h = 0;
     int scan = 0;
-    size_t p = start + 2;
+    size_t p = 2;
     while (p < length) {
         if (data[p++] != 0xFF) {
             if (!scan) return 0;
@@ -23,7 +19,7 @@ int CameraJPEG_Find(const uint8_t *data, size_t length, size_t *offset,
         if (marker >= 0xD0 && marker <= 0xD7) { if (!scan) return 0; continue; }
         if (marker == 0xD9) {
             if (!scan || !w || !h) return 0;
-            *offset = start; *size = p - start; *width = w; *height = h;
+            *size = p; *width = w; *height = h;
             return 1;
         }
         if (marker == 0xD8 || marker == 0x01) return 0;
@@ -42,6 +38,21 @@ int CameraJPEG_Find(const uint8_t *data, size_t length, size_t *offset,
             scan = 1;
         }
         p += segment;
+    }
+    return 0;
+}
+
+int CameraJPEG_Find(const uint8_t *data, size_t length, size_t *offset,
+                    size_t *size, uint16_t *width, uint16_t *height)
+{
+    if (!data || !offset || !size || !width || !height) return 0;
+    /* Continuous DMA can contain a damaged frame followed by an intact one. */
+    for (size_t start = 0; start + 1 < length; ++start) {
+        if (data[start] != 0xFF || data[start + 1] != 0xD8) continue;
+        if (ParseJPEG(data + start, length - start, size, width, height)) {
+            *offset = start;
+            return 1;
+        }
     }
     return 0;
 }

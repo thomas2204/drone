@@ -9,6 +9,7 @@ typedef struct {
     uint32_t session, active, pending, ready, done, failed;
     uint32_t start_ms, duration_ms, started;
     uint32_t rx_bytes, rx_errors, rx_overflows, commands, busy_commands;
+    uint32_t devices;
 } RecordReport;
 extern volatile RecordReport record_report;
 bool RecordControl_Init(void);

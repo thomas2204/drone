@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 typedef struct {
-    int init_result;          /* 0 ready, 1 starting, negative: probe/idle/init/config */
+    int init_result;          /* 0 ready, positive starting; -6: not PDoA silicon. */
     uint32_t device_id;
     uint32_t polls, received, timeouts, errors, rejected;
     uint32_t transmitted, frames;
@@ -18,7 +18,20 @@ typedef struct {
     uint32_t cir_power;
     uint16_t accumulation_count;
     uint8_t dgc_decision;
-    int16_t clock_offset_raw; /* Relative clock offset: raw / 2^26; last accepted radio frame., debug shit*/
+    int16_t clock_offset_raw; /* Relative clock offset: raw / 2^26. */
+    uint32_t sys_cfg_readback;
+    uint8_t sts_length_readback;
+    int16_t pdoa_raw;          /* Phase difference in radians * 2048, NOT bearing. */
+    int16_t sts_quality;
+    uint16_t sts_status[2];
+    int64_t tdoa_raw;
+    bool pdoa_valid;           /* Valid phase from the latest accepted range. */
+    int16_t pdoa_filtered_raw;
+    bool pdoa_filtered_valid;
+    bool angle_calibrated;
+    bool angle_valid;
+    int32_t bearing_mdeg;      /* Ideal calibrated front-sector bearing. */
+    uint32_t pdoa_rejected;
     bool config_verified;
     uint32_t last_update_ms;
     int32_t distance_mm;
@@ -32,5 +45,8 @@ void UWB_RangeInit(void);
 void UWB_RangeTaskUnavailable(void);
 void UWB_RangeTask(void *argument);
 bool UWB_RangeGetSnapshot(UWB_RangeSnapshot *out);
+/* Bluetooth command task: capture the current fresh filtered phase as straight
+ * ahead. RAM only; the UWB task applies it without sharing driver access. */
+bool UWB_RangeZeroBearing(void);
 
 #endif

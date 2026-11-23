@@ -52,6 +52,13 @@ volatile ThermalReport thermal_report;
 static uint32_t now;
 static jmp_buf stop;
 static int task_steps=-1, partner;
+static unsigned patrol_command;
+static unsigned uwb_zero_commands;
+bool UWB_RangeZeroBearing(void) {++uwb_zero_commands; return true;}
+void MAVLink_PatrolRequest(unsigned command) {patrol_command=command;}
+void MAVLink_PatrolStatus(char *out,uint32_t capacity) {
+    snprintf(out,capacity,"PATROL IDLE\\r\\n");
+}
 uint32_t HAL_GetTick(void) {return now;}
 void osDelay(uint32_t ticks) {
     if(task_steps>=0 && --task_steps==0) longjmp(stop,1);
@@ -79,7 +86,15 @@ static void run(int n) {
     task_steps=-1;
 }
 int main(void) {
+    feed("  UwB ZeRo  \\r\\n");run(3);assert(uwb_zero_commands==1);
+    feed("uwb zero");run(20);assert(uwb_zero_commands==2);
     assert(RecordControl_Init());
+    feed("patrol\\n");run(3);assert(patrol_command==1);
+    feed("patrol stop\\n");run(3);assert(patrol_command==2);
+    feed("patrol land\\n");run(3);assert(patrol_command==3);
+    feed("patrol status\\n");run(3);assert(patrol_command==3);
+    feed("patrolxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n");run(3);
+    assert(patrol_command==3); /* Overflow must not launch a patrol. */
     assert(!record_report.active); /* No automatic recording. */
     feed("record\\r\\n");run(3);
     assert(!record_report.active); /* Thermal warmup gates start. */
@@ -94,6 +109,10 @@ int main(void) {
     assert(record_report.started && record_report.ready==3);
     uint32_t start=record_report.start_ms;
     now=start+9999;assert(RecordControl_HasTime());
+    RecordControl_Done(RECORD_THERMAL,false);
+    assert(record_report.failed==RECORD_THERMAL);
+    assert(RecordControl_HasTime()); /* Healthy camera keeps the full window. */
+    record_report.failed=record_report.done=0;
     now=start+10000;assert(!RecordControl_HasTime());
     feed("record");run(20); /* Idle delimiter, no newline. */
     assert(record_report.busy_commands==1 && record_report.session==1);
@@ -113,6 +132,19 @@ int main(void) {
     assert(RecordControl_WaitStart(RECORD_CAMERA));
     now=record_report.start_ms+9999;assert(RecordControl_HasTime());
     now=record_report.start_ms+10000;assert(!RecordControl_HasTime());
+    RecordControl_Done(RECORD_CAMERA,true);
+    RecordControl_Done(RECORD_THERMAL,true);
+    thermal_report.ready=0;
+    feed("record cam");run(20);
+    assert(record_report.session==4 && record_report.devices==RECORD_CAMERA);
+    assert(!RecordControl_TakeRequest(RECORD_THERMAL));
+    assert(RecordControl_TakeRequest(RECORD_CAMERA));
+    assert(!RecordControl_WaitStart(RECORD_THERMAL));
+    assert(RecordControl_WaitStart(RECORD_CAMERA) && RecordControl_HasTime());
+    RecordControl_Done(RECORD_THERMAL,false);
+    assert(record_report.active && !record_report.failed);
+    RecordControl_Done(RECORD_CAMERA,true);
+    assert(!record_report.active && record_report.done==RECORD_CAMERA);
     assert(record_report.rx_bytes>0 && record_report.rx_overflows==0);
     puts("UART parsing, warmup, synchronization, deadline, busy/repeat, failure and tick wrap passed");
     return 0;

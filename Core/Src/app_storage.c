@@ -47,6 +47,15 @@ FRESULT AppStorage_Mount(void)
     osMutexRelease(volume_mutex);return result;
 }
 
+FRESULT AppStorage_Stat(const TCHAR *path)
+{
+    if (!volume_mutex || osMutexAcquire(volume_mutex,osWaitForever)!=osOK) return FR_TIMEOUT;
+    FRESULT result=MountLocked();
+    if (result==FR_OK) result=f_stat(path,NULL);
+    osMutexRelease(volume_mutex);
+    return result;
+}
+
 FRESULT AppStorage_Open(FIL *file,const TCHAR *path,BYTE mode)
 {
     if (!volume_mutex || osMutexAcquire(volume_mutex,osWaitForever)!=osOK) return FR_TIMEOUT;

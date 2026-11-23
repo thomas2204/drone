@@ -189,16 +189,25 @@ static bool record_clip(void)
     if (rc) { thermal_report.storage_error=rc; return false; }
     bool success=RecordControl_WaitStart(RECORD_THERMAL);
     thermal_report.storage_error=0;
+    thermal_report.clip_read_errors=0;
+    unsigned consecutive_errors=0;
     if (success) {
         while (RecordControl_HasTime()) {
             int error=read_frame();
             if (!RecordControl_HasTime()) break;
-            if (error<0) { success=false; break; }
+            if (error<0) {
+                thermal_report.clip_read_errors++;
+                if (++consecutive_errors>=8U) { success=false; break; }
+                if (consecutive_errors==1U)
+                    printf("THERMAL: frame error %d; retrying\r\n",error);
+                osDelay(10);
+                continue;
+            }
+            consecutive_errors=0;
             rc=avi_add_frame(To);
             if (rc) { thermal_report.storage_error=rc; success=false; break; }
         }
     }
-    if (record_report.failed) success=false;
     rc=avi_close_duration(record_report.started ? record_report.duration_ms : 0);
     if (rc) { thermal_report.storage_error=rc; success=false; }
     thermal_report.clip_frames=avi_frames();

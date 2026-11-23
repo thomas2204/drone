@@ -43,6 +43,9 @@
 #include "app_log.h"
 #if APP_CAMERA_ENABLED
 #include "camera_snapshot.h"
+#if CAMERA_FLOW_BENCH
+#include "camera_flow.h"
+#endif
 #endif
 #if BOARD_BENCH_TEST
 #include "board_bench.h"
@@ -175,6 +178,9 @@ void vApplicationMallocFailedHook(void)
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
   if (!AppStorage_Init() || !AppLog_Init()) Error_Handler();
+#if APP_CAMERA_ENABLED && CAMERA_FLOW_BENCH
+  if (!CameraFlow_Init()) Error_Handler();
+#endif
 #if BOARD_CAMERA_TEST
   static const osThreadAttr_t camera_attributes = {
       .name = "camera_test", .stack_mem = camera_task_stack,
@@ -345,7 +351,7 @@ void BLUETOOTH(void *argument)
         if (length > 0 && (size_t)length < sizeof(buffer))
             AppLog_Write(buffer, (uint16_t)length, 100);
 
-        UWB_RangeSnapshot uwb;
+        UWB_RangeSnapshot uwb = {0};
         if (!UWB_RangeGetSnapshot(&uwb))
             length = snprintf(buffer, sizeof(buffer), "UWB: unavailable\r\n");
         else if (uwb.init_result > 0)
@@ -366,6 +372,31 @@ void BLUETOOTH(void *argument)
             length = snprintf(buffer, sizeof(buffer), "UWB: no range\r\n");
         if (length > 0 && (size_t)length < sizeof(buffer))
             AppLog_Write(buffer, (uint16_t)length, 100);
+
+        if (uwb.init_result == 0) {
+            bool fresh = uwb.valid &&
+                (uint32_t)(HAL_GetTick() - uwb.last_update_ms) < 1000U;
+            if (!fresh || !uwb.pdoa_valid)
+                length = snprintf(buffer, sizeof(buffer), "UWB angle: no valid phase\r\n");
+            else {
+                /* Integer formatting: embedded printf has no float support. */
+                long phase_mdeg = (long)((float)uwb.pdoa_raw * 27.9764548f);
+                if (uwb.angle_valid) {
+                    long magnitude = uwb.bearing_mdeg < 0 ?
+                        -(long)uwb.bearing_mdeg : (long)uwb.bearing_mdeg;
+                    length = snprintf(buffer, sizeof(buffer), "UWB angle approx: %s%ld.%01ld deg\r\n",
+                        uwb.bearing_mdeg < 0 ? "-" : "+", magnitude / 1000,
+                        (magnitude % 1000) / 100);
+                }
+                else
+                    length = snprintf(buffer, sizeof(buffer),
+                        "UWB phase: %ld mdeg | bearing: %s\r\n", phase_mdeg,
+                        !uwb.pdoa_filtered_valid ? "filter warming up" :
+                        uwb.angle_calibrated ? "invalid geometry" : "send uwb zero facing target");
+            }
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                AppLog_Write(buffer, (uint16_t)length, 100);
+        }
 
 #if APP_CAMERA_ENABLED
         length = CameraSnapshot_FormatStatus(buffer, sizeof(buffer));
@@ -398,6 +429,24 @@ void BLUETOOTH(void *argument)
             (uint32_t)(HAL_GetTick() - last_gps_status_ms) >= 5000U) {
             last_gps_status_ms = HAL_GetTick();
             AppLog_Write(buffer, (uint16_t)length, 100);
+        }
+
+        /* Keep the comparison fields visible without the full verbose dump.
+         * iTOW identifies the receiver epoch; age prevents stale numbers from
+         * being mistaken for a current measurement. Integer units match UBX. */
+        if (gps_available && gps.pvt_count != 0U) {
+            uint32_t accuracy_now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            length = snprintf(buffer, sizeof(buffer),
+                "GPS ACC tow=%lums age=%lums valid=%u Sat=%u hAcc=%lumm vAcc=%lumm sAcc=%lumm/s\r\n",
+                (unsigned long)gps.pvt.tow_ms,
+                (unsigned long)(accuracy_now - gps.last_pvt_ms),
+                (unsigned)gps.pvt.fix_ok,
+                (unsigned)gps.pvt.satellites,
+                (unsigned long)gps.pvt.horizontal_accuracy_mm,
+                (unsigned long)gps.pvt.vertical_accuracy_mm,
+                (unsigned long)gps.pvt.speed_accuracy_mm_s);
+            if (length > 0 && (size_t)length < sizeof(buffer))
+                AppLog_Write(buffer, (uint16_t)length, 100);
         }
 
 #if GPS_DIAGNOSTICS_ENABLED && GPS_VERBOSE_LOGS

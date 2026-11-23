@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-// Adapted for STM32: retained CIF and JPEG tables; removed ESP attributes.
+// Adapted for STM32: retained CIF/SVGA and JPEG tables; removed ESP attributes.
 #ifndef BOARD_OV2640_SETTINGS_H
 #define BOARD_OV2640_SETTINGS_H
 #include <stdint.h>
@@ -218,6 +218,59 @@ static const uint8_t ov2640_settings_to_cif[][2] = {
     //Set the image window size >= output size
     {HSIZE, 0x64},
     {VSIZE, 0x4a},
+    {XOFFL, 0x00},
+    {YOFFL, 0x00},
+    {VHYX, 0x00},
+    {TEST, 0x00},
+
+    {CTRL2, CTRL2_DCW_EN | 0x1D},
+    {CTRLI, CTRLI_LP_DP | 0x00},
+    //{R_DVP_SP, 0x08},
+    {0, 0}
+};
+
+static const uint8_t ov2640_settings_to_svga[][2] = {
+    {BANK_SEL, BANK_SENSOR},
+    {COM7, COM7_RES_SVGA},
+
+    //Set the sensor output window
+    {COM1, 0x0A},
+    {REG32, REG32_SVGA},
+    {HSTART, 0x11},
+    {HSTOP, 0x43},
+    {VSTART, 0x00},
+    {VSTOP, 0x4b},
+
+    //{CLKRC, 0x00},
+    {0x37, 0xc0},
+    {BD50, 0xca},
+    {BD60, 0xa8},
+    {0x5a, 0x23},
+    {0x6d, 0x00},
+    {0x3d, 0x38},
+    {0x39, 0x92},
+    {0x35, 0xda},
+    {0x22, 0x1a},
+    {0x37, 0xc3},
+    {0x23, 0x00},
+    {ARCOM2, 0xc0},
+    {0x06, 0x88},
+    {0x07, 0xc0},
+    {COM4, 0x87},
+    {0x0e, 0x41},
+    {0x42, 0x03},
+    {0x4c, 0x00},
+    {BANK_SEL, BANK_DSP},
+    {RESET, RESET_DVP},
+
+    //Set the sensor resolution (UXGA, SVGA, CIF)
+    {HSIZE8, 0x64},
+    {VSIZE8, 0x4B},
+    {SIZEL, 0x00},
+
+    //Set the image window size >= output size
+    {HSIZE, 0xC8},
+    {VSIZE, 0x96},
     {XOFFL, 0x00},
     {YOFFL, 0x00},
     {VHYX, 0x00},

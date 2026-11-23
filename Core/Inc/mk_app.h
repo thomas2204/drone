@@ -47,4 +47,9 @@ bool MAVLink_GetTelemetry(FC_Telemetry_t *out);
 // Raw received bytes, for debugging
 uint32_t MAVLink_GetRxByteCount(void);
 
+/* Queued only; all MAVLink flight transmissions remain owned by MAVLink_Task.
+ * Commands: 1 patrol, 2 stop/hover, 3 land. Status text is a constant string. */
+void MAVLink_PatrolRequest(unsigned command);
+void MAVLink_PatrolStatus(char *out, uint32_t capacity);
+
 #endif
