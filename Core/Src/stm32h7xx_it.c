@@ -343,10 +343,30 @@ void UART7_IRQHandler(void)
   /* USER CODE END UART7_IRQn 1 */
 }
 /* USER CODE BEGIN 1 */
-
+extern I2C_HandleTypeDef hi2c1;
+extern DMA_HandleTypeDef hdma_i2c1_rx;
+extern UART_HandleTypeDef huart3;
+extern DMA_HandleTypeDef  hdma_usart3_rx;
+void DMA1_Stream6_IRQHandler(void) {
+   HAL_DMA_IRQHandler(&hdma_i2c1_rx); 
+}
+void I2C1_EV_IRQHandler(void) {
+  HAL_I2C_EV_IRQHandler(&hi2c1); 
+}
+void I2C1_ER_IRQHandler(void)      
+{ 
+  HAL_I2C_ER_IRQHandler(&hi2c1); 
+}
 void SAI2_IRQHandler(void)
 {
   HAL_SAI_IRQHandler(&hsai_BlockA2);
+}
+
+void DMA1_Stream7_IRQHandler(void){ 
+  HAL_DMA_IRQHandler(&hdma_usart3_rx);
+}
+void USART3_IRQHandler(void)      {
+  HAL_UART_IRQHandler(&huart3); 
 }
 
 /* USER CODE END 1 */

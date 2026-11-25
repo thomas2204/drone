@@ -179,12 +179,19 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Include MAVLink C library
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/MAVLink
+    ${CMAKE_SOURCE_DIR}/c_library_v2
     ${CMAKE_SOURCE_DIR}/ws2812b/ws2812-dma
 )
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    # Add user sources here
+    Core/Src/ld6002.c
+    Core/Src/LD6002_UART.c
+    Core/Src/thermal_dma.c
+)
 # Qorvo DW3000 driver and the drone's SS-TWR initiator.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/uwb_range.c
