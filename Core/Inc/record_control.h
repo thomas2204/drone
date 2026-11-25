@@ -5,6 +5,7 @@
 
 #define RECORD_CAMERA 1U
 #define RECORD_THERMAL 2U
+#define RECORD_FLOW_LOG 4U
 typedef struct {
     uint32_t session, active, pending, ready, done, failed;
     uint32_t start_ms, duration_ms, started;

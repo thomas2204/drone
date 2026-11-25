@@ -949,12 +949,17 @@ static struct {
     bool ready, fault_reported;
 } live_camera;
 static volatile bool live_camera_active;
+static volatile uint32_t live_last_frame_ms;
 
 static bool LiveCameraProfile(void)
 {
+#if PMW3901_FLOW_MAVLINK
+    return false;
+#else
     return !camera_snapshot_video_mp4 && !camera_snapshot_video_uncompressed &&
         !camera_snapshot_probe_registers && !camera_snapshot_software_sccb &&
         !camera_snapshot_skip_dsp_prefix;
+#endif
 }
 
 static bool InitRecordingSensor(void)
@@ -1007,23 +1012,210 @@ static void StreamCamera(void)
         return;
     }
     const uint32_t captured_ms = HAL_GetTick();
+    live_last_frame_ms = captured_ms;
     CameraFlowReference reference;
     MAVLink_GetFlowReference(&reference);
     CameraFlow_Stream((const uint8_t *)capture + live_camera_report.jpeg_offset,
                       live_camera_report.jpeg_bytes, captured_ms, &reference);
     if (!live_camera_active)
-        Log("FLOW: live camera active; send record or record cam to save video\r\n");
+        Log("CAM: live capture started\r\n");
     live_camera_active = true;
     live_camera.failures = 0U;
     live_camera.fault_reported = false;
+}
+
+typedef struct {
+    uint32_t elapsed_ms;
+    CameraFlowEkfSample sample;
+} FlowLogRow;
+
+static bool WriteLogBytes(FIL *file, const void *data, size_t bytes)
+{
+    UINT written = 0U;
+    return f_write(file, data, (UINT)bytes, &written) == FR_OK && written == bytes;
+}
+
+static bool OpenFlowLog(FIL *file, char name[20], bool flight)
+{
+    FRESULT result = FR_EXIST;
+    for (unsigned i = 0; i < 1000U && result == FR_EXIST; ++i) {
+        snprintf(name, 20, "0:/%s%03u.CSV", flight ? "FLT" : "EKF", i);
+        result = AppStorage_Open(file, name, FA_CREATE_NEW | FA_WRITE);
+    }
+    if (result == FR_OK) return true;
+    char message[64];
+    snprintf(message, sizeof(message), "%s LOG: SD open failed FS=%u\r\n",
+             flight ? "FLIGHT" : "FLOW", (unsigned)result);
+    Log(message);
+    return false;
+}
+
+static bool WriteFlowLogHeader(FIL *file, bool flight)
+{
+    static const char header[] = "t_ms,vx_mm_s,vy_mm_s,vz_mm_s,pos_age_ms,ekf_flags,ekf_age_ms,"
+        "yaw_mrad,imu_age_ms,tof_mm,tof_age_ms,flow_tx_count,fc_flow_rx_count,fc_flow_age_ms,"
+        "fc_flow_x_mrad_s,fc_flow_y_mrad_s,fc_flow_quality";
+    static const char flight_columns[] =
+        ",armed,mode,heartbeat_fresh,roll_mrad,pitch_mrad,gx_mrad_s,gy_mrad_s,gz_mrad_s\r\n";
+    static const char line_end[] = "\r\n";
+    return WriteLogBytes(file, header, sizeof(header) - 1U) &&
+        WriteLogBytes(file, flight ? flight_columns : line_end,
+                      flight ? sizeof(flight_columns) - 1U : sizeof(line_end) - 1U);
+}
+
+static bool WriteFlowLogRows(FIL *file, const FlowLogRow *rows, unsigned capacity,
+                             unsigned first, unsigned count, bool flight)
+{
+    bool ok = true;
+    for (unsigned i = 0; i < count && ok; ++i) {
+        const FlowLogRow *row = &rows[(first + i) % capacity];
+        const CameraFlowEkfSample *s = &row->sample;
+        const CameraFlowReference *f = &s->flow;
+        char line[208];
+        int n = snprintf(line, sizeof(line), "%lu,%d,%d,%d,%u,%u,%u,%d,%u,%u,%u,%lu,%lu,%u,%d,%d,%u",
+            (unsigned long)row->elapsed_ms, s->vx_mm_s, s->vy_mm_s, s->vz_mm_s,
+            (unsigned)s->position_age_ms, (unsigned)s->ekf_flags, (unsigned)s->ekf_age_ms,
+            f->yaw_mrad, (unsigned)f->imu_age_ms, (unsigned)f->tof_mm, (unsigned)f->tof_age_ms,
+            (unsigned long)f->flow_tx_count, (unsigned long)f->fc_flow_rx_count,
+            (unsigned)f->fc_flow_age_ms, f->fc_flow_x_mrad_s, f->fc_flow_y_mrad_s,
+            (unsigned)f->fc_flow_quality);
+        if (n <= 0 || (size_t)n >= sizeof(line)) {
+            ok = false;
+            break;
+        }
+        size_t length = (size_t)n;
+        n = flight ? snprintf(line + length, sizeof(line) - length, ",%u,%u,%u,%d,%d,%d,%d,%d\r\n",
+                   (unsigned)s->armed, (unsigned)s->flight_mode, (unsigned)s->heartbeat_fresh,
+                   f->roll_mrad, f->pitch_mrad, f->gx_mrad_s, f->gy_mrad_s, f->gz_mrad_s)
+                   : snprintf(line + length, sizeof(line) - length, "\r\n");
+        ok = n > 0 && (size_t)n < sizeof(line) - length && WriteLogBytes(file, line, length + (size_t)n);
+    }
+    return ok;
+}
+
+static bool CloseFlowLog(FIL *file, const char *name, unsigned count, bool flight, bool ok)
+{
+    if (AppStorage_Close(file) != FR_OK) ok = false;
+    if (AppStorage_UnmountIfIdle() != FR_OK) ok = false;
+    char message[76];
+    snprintf(message, sizeof(message), "%s LOG: %s %s samples=%u\r\n",
+             flight ? "FLIGHT" : "FLOW", ok ? "saved" : "write failed", name, count);
+    Log(message);
+    return ok;
+}
+
+static bool RecordFlowLog(void)
+{
+    enum { sample_period_ms = 100, max_samples = 100 };
+    FlowLogRow rows[max_samples];
+    if (!RecordControl_WaitStart(RECORD_FLOW_LOG)) return false;
+    unsigned count = 0U;
+    uint32_t next_sample_ms = 0U;
+    while (RecordControl_HasTime()) {
+        const uint32_t elapsed = HAL_GetTick() - record_report.start_ms;
+        if (elapsed >= next_sample_ms && count < max_samples) {
+            rows[count].elapsed_ms = elapsed;
+            MAVLink_GetFlowEkfSample(&rows[count++].sample);
+            next_sample_ms = (elapsed / sample_period_ms + 1U) * sample_period_ms;
+        }
+        if (LiveCameraProfile() && !(SCB->CCR & SCB_CCR_DC_Msk)) StreamCamera();
+        DelayMs(5);
+    }
+    char name[20];
+    if (!count || !OpenFlowLog(&camera_file, name, false)) return false;
+    const bool ok = WriteFlowLogHeader(&camera_file, false) &&
+        WriteFlowLogRows(&camera_file, rows, max_samples, 0U, count, false);
+    return CloseFlowLog(&camera_file, name, count, false, ok);
+}
+
+void CameraSnapshot_FlightLogTask(void *argument)
+{
+    (void)argument;
+    enum { sample_ms = 200, checkpoint_ms = 5000, capacity = 301 };
+    /* Buffer unsaved rows through a temporary SD open failure. */
+    static FlowLogRow rows[capacity] __attribute__((section(".sd_dma_buffer"), aligned(32)));
+    static FIL file __attribute__((section(".sd_dma_buffer"), aligned(32)));
+    unsigned next = 0U, count = 0U, saved = 0U;
+    uint32_t start_ms = 0U, last_attempt_ms = 0U;
+    bool active = false, opened = false, failed = false;
+    char name[20];
+    for (;;) {
+        CameraFlowEkfSample sample;
+        MAVLink_GetFlowEkfSample(&sample);
+        const uint32_t now = HAL_GetTick();
+        const bool starting = !active && sample.heartbeat_fresh && sample.armed;
+        if (starting) {
+            active = true;
+            start_ms = now;
+        }
+        if (active && !failed) {
+            rows[next] = (FlowLogRow){ .elapsed_ms = now - start_ms, .sample = sample };
+            next = (next + 1U) % capacity;
+            if (count < capacity) ++count;
+        }
+        /* Link loss is recorded as a gap, never interpreted as disarm. */
+        const bool finished = active && sample.heartbeat_fresh && !sample.armed;
+        if (active && !failed && (starting || finished || now - last_attempt_ms >= checkpoint_ms)) {
+            last_attempt_ms = now;
+            bool ok = true;
+            if (!opened) {
+                opened = OpenFlowLog(&file, name, true);
+                if (opened) ok = WriteFlowLogHeader(&file, true);
+            }
+            if (opened) {
+                const unsigned first = (next + capacity - count) % capacity;
+                if (ok) ok = WriteFlowLogRows(&file, rows, capacity, first, count, true);
+                if (ok) ok = f_sync(&file) == FR_OK;
+                if (ok) {
+                    saved += count;
+                    count = 0U;
+                    if (!finished) {
+                        char message[76];
+                        snprintf(message, sizeof(message), "FLIGHT LOG: checkpoint %s samples=%u\r\n", name, saved);
+                        Log(message);
+                    }
+                } else {
+                    CloseFlowLog(&file, name, saved, true, false);
+                    opened = false;
+                    failed = true;
+                }
+            }
+        }
+        if (finished) {
+            if (opened) CloseFlowLog(&file, name, saved, true, true);
+            active = opened = failed = false;
+            next = count = saved = 0U;
+        }
+        DelayMs(sample_ms);
+    }
 }
 #endif
 
 int CameraSnapshot_FormatStatus(char *buffer, size_t size)
 {
 #if CAMERA_FLOW_MAVLINK
-    if (live_camera_active && !camera_snapshot.done && !camera_snapshot.video_requested)
-        return snprintf(buffer,size,"CAM: live flow; send record or record cam to save video\r\n");
+    if (LiveCameraProfile() && (camera_snapshot.done || !camera_snapshot.video_requested)) {
+        CameraFlowReading reading;
+        CameraFlowEkfSample telemetry;
+        const bool tracked = CameraFlow_Read(&reading);
+        MAVLink_GetFlowEkfSample(&telemetry);
+        const CameraFlowReference *flow = &telemetry.flow;
+        const bool capturing = live_camera_active &&
+            (uint32_t)(HAL_GetTick() - live_last_frame_ms) < 500U;
+        const bool received = telemetry.heartbeat_fresh && flow->fc_flow_age_ms < 200U &&
+            flow->fc_flow_quality > 0U;
+        char tof[24];
+        if (flow->tof_age_ms < 200U)
+            snprintf(tof, sizeof(tof), "%u mm", (unsigned)flow->tof_mm);
+        else
+            snprintf(tof, sizeof(tof), "unavailable");
+        return snprintf(buffer, size,
+            "CAM: capture %s | track %s q=%u | FC flow %s q=%u | TX=%lu | ToF %s\r\n",
+            capturing ? "OK" : "waiting",
+            tracked ? "OK" : "no valid frame", tracked ? (unsigned)reading.quality : 0U,
+            received ? "OK" : "no fresh data", received ? (unsigned)flow->fc_flow_quality : 0U,
+            (unsigned long)flow->flow_tx_count, tof);
+    }
 #endif
     if (!camera_snapshot.done && !camera_snapshot.video_requested)
         return snprintf(buffer,size,"CAM: idle; send record or record cam\r\n");
@@ -1049,6 +1241,12 @@ void CameraSnapshot_Task(void *argument)
     DelayMs(1500); /* Let application reception and audio tasks start first. */
 #endif
     for (;;) {
+#if CAMERA_FLOW_MAVLINK
+        if (RecordControl_TakeRequest(RECORD_FLOW_LOG)) {
+            RecordControl_Done(RECORD_FLOW_LOG, RecordFlowLog());
+            continue;
+        }
+#endif
 #if !BOARD_CAMERA_TEST
         if (RecordControl_TakeRequest(RECORD_CAMERA)) {
             commanded_recording = true;

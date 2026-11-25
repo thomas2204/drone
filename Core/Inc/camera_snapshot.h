@@ -68,5 +68,8 @@ extern volatile uint32_t camera_snapshot_video_mp4;
 /* Debug export: reread a completed file into capture if it fits 128KiB. */
 extern volatile uint32_t camera_snapshot_export_recording;
 void CameraSnapshot_Task(void *argument);
+#if CAMERA_FLOW_MAVLINK
+void CameraSnapshot_FlightLogTask(void *argument);
+#endif
 int CameraSnapshot_FormatStatus(char *buffer, size_t size);
 #endif

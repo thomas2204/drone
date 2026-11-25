@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { WIDTH = 80, HEIGHT = 60, PATCH = 7, SEARCH = 6, POINTS = 36 };
+enum { WIDTH = 80, HEIGHT = 60, PATCH = 7, LARGE_PATCH = 9, SPARSE_PATCH = 11, SEARCH = 6, POINTS = 36 };
 static uint8_t images[2][WIDTH * HEIGHT];
 /* Largest frame in the bench recordings was 23,720 bytes. Larger frames
  * still go to SD. Only the optional flow analysis skips them. */
@@ -186,7 +186,7 @@ static bool Fit(const Match *points, unsigned count, Motion *result)
 }
 
 static unsigned PatchError(const uint8_t *previous, const uint8_t *current,
-                           int x, int y, int dx, int dy, unsigned cutoff, bool compensate)
+                           int x, int y, int dx, int dy, unsigned cutoff, bool compensate, int patch)
 {
     int offset = 0;
     if (compensate) {
@@ -194,16 +194,16 @@ static unsigned PatchError(const uint8_t *previous, const uint8_t *current,
          * This leaves the patch's shape available for matching. */
         const uint8_t *a = previous + y*WIDTH + x;
         const uint8_t *b = current + (y + dy)*WIDTH + x + dx;
-        const int bottom = (PATCH - 1)*WIDTH;
-        offset = ((a[0] - b[0]) + (a[PATCH - 1] - b[PATCH - 1]) +
+        const int bottom = (patch - 1)*WIDTH;
+        offset = ((a[0] - b[0]) + (a[patch - 1] - b[patch - 1]) +
                   (a[bottom] - b[bottom]) +
-                  (a[bottom + PATCH - 1] - b[bottom + PATCH - 1])) / 4;
+                  (a[bottom + patch - 1] - b[bottom + patch - 1])) / 4;
     }
     unsigned error = 0;
-    for (int row = 0; row < PATCH; ++row) {
+    for (int row = 0; row < patch; ++row) {
         const uint8_t *a = previous + (y + row)*WIDTH + x;
         const uint8_t *b = current + (y + row + dy)*WIDTH + x + dx;
-        for (int column = 0; column < PATCH; ++column)
+        for (int column = 0; column < patch; ++column)
             error += (unsigned)abs(a[column] - b[column] - offset);
         if (error >= cutoff) break;
     }
@@ -218,12 +218,12 @@ static float Subpixel(unsigned left, unsigned middle, unsigned right)
 
 /* Prefer corners over straight grout edges within each grid cell. Edges
  * alone can slide along their length and produce ambiguous matches. */
-static unsigned CornerScore(const uint8_t *image, int x, int y)
+static unsigned CornerScore(const uint8_t *image, int x, int y, int patch)
 {
     int xx = 0, xy = 0, yy = 0;
-    for (int row = 1; row < PATCH - 1; ++row) {
+    for (int row = 1; row < patch - 1; ++row) {
         const uint8_t *p = image + (y + row)*WIDTH + x;
-        for (int column = 1; column < PATCH - 1; ++column) {
+        for (int column = 1; column < patch - 1; ++column) {
             int dx = (p[column + 1] - p[column - 1]) / 4;
             int dy = (p[column + WIDTH] - p[column - WIDTH]) / 4;
             xx += dx*dx; xy += dx*dy; yy += dy*dy;
@@ -233,31 +233,55 @@ static unsigned CornerScore(const uint8_t *image, int x, int y)
     return trace ? (unsigned)(((int64_t)xx*yy - (int64_t)xy*xy) / trace) : 0;
 }
 
+/* Reject smooth illumination gradients before using a wider window. Linear
+ * brightness changes disappear in the difference against nearby pixels. */
+static bool PatchHasDetail(const uint8_t *image, int x, int y)
+{
+    unsigned detail_pixels = 0;
+    for (int row = 2; row < SPARSE_PATCH - 2; ++row) {
+        const uint8_t *p = image + (y + row)*WIDTH + x;
+        for (int column = 2; column < SPARSE_PATCH - 2; ++column) {
+            int twice_center = 2 * p[column];
+            int x_detail = abs(twice_center - p[column - 2] - p[column + 2]);
+            int y_detail = abs(twice_center - p[column - 2*WIDTH] - p[column + 2*WIDTH]);
+            if ((x_detail >= 12 || y_detail >= 12) && ++detail_pixels >= 4U) return true;
+        }
+    }
+    return false;
+}
+
 typedef enum { TRACK_VALID, TRACK_TOO_FEW, TRACK_DISAGREEMENT } TrackResult;
 
-static TrackResult TrackPass(const uint8_t *previous, const uint8_t *current, bool compensate)
+static TrackResult TrackPass(const uint8_t *previous, const uint8_t *current, bool compensate, int patch)
 {
     Match points[POINTS];
     unsigned count = 0;
+    const int inset = (patch - PATCH) / 2;
+    const int half_patch = (patch - 1) / 2;
     for (int row = 8; row <= 43; row += 7) {
         for (int column = 8; column <= 63; column += 11) {
             unsigned corner = 0;
             int x = column, y = row;
             for (int oy = -2; oy <= 2; oy += 2) {
                 for (int ox = -2; ox <= 2; ox += 2) {
-                    unsigned score = CornerScore(previous, column + ox, row + oy);
+                    int candidate_x = column + ox - inset;
+                    int candidate_y = row + oy - inset;
+                    if (candidate_x < SEARCH || candidate_x + patch + SEARCH > WIDTH ||
+                        candidate_y < SEARCH || candidate_y + patch + SEARCH > HEIGHT) continue;
+                    unsigned score = CornerScore(previous, candidate_x, candidate_y, patch);
                     if (score <= corner) continue;
+                    if (patch == SPARSE_PATCH && !PatchHasDetail(previous, candidate_x, candidate_y)) continue;
                     corner = score;
-                    x = column + ox;
-                    y = row + oy;
+                    x = candidate_x;
+                    y = candidate_y;
                 }
             }
             if (corner < 12) continue;
             unsigned best = UINT_MAX, second = UINT_MAX;
             int best_x = 0, best_y = 0;
             int low = 255, high = 0;
-            for (int py = 0; py < PATCH; ++py) {
-                for (int px = 0; px < PATCH; ++px) {
+            for (int py = 0; py < patch; ++py) {
+                for (int px = 0; px < patch; ++px) {
                     int value = previous[(y + py) * WIDTH + x + px];
                     if (value < low) low = value;
                     if (value > high) high = value;
@@ -266,7 +290,7 @@ static TrackResult TrackPass(const uint8_t *previous, const uint8_t *current, bo
             if (high - low < 20) continue;
             for (int dy = -SEARCH; dy <= SEARCH; ++dy) {
                 for (int dx = -SEARCH; dx <= SEARCH; ++dx) {
-                    unsigned error = PatchError(previous, current, x, y, dx, dy, second, compensate);
+                    unsigned error = PatchError(previous, current, x, y, dx, dy, second, compensate, patch);
                     if (error < best) {
                         second = best;
                         best = error;
@@ -277,13 +301,14 @@ static TrackResult TrackPass(const uint8_t *previous, const uint8_t *current, bo
                     }
                 }
             }
-            if (best > 16U * PATCH * PATCH || second - best < 20 ||
+            if (best > 16U * (unsigned)(patch * patch) || second - best < 20 ||
                 abs(best_x) == SEARCH || abs(best_y) == SEARCH) continue;
-            float fx = Subpixel(PatchError(previous,current,x,y,best_x-1,best_y,UINT_MAX,compensate), best,
-                                PatchError(previous,current,x,y,best_x+1,best_y,UINT_MAX,compensate));
-            float fy = Subpixel(PatchError(previous,current,x,y,best_x,best_y-1,UINT_MAX,compensate), best,
-                                PatchError(previous,current,x,y,best_x,best_y+1,UINT_MAX,compensate));
-            points[count] = (Match){ x + 3.0f - 39.5f, y + 3.0f - 29.5f,
+            if (patch == SPARSE_PATCH && !PatchHasDetail(current, x + best_x, y + best_y)) continue;
+            float fx = Subpixel(PatchError(previous, current, x, y, best_x - 1, best_y, UINT_MAX, compensate, patch), best,
+                                PatchError(previous, current, x, y, best_x + 1, best_y, UINT_MAX, compensate, patch));
+            float fy = Subpixel(PatchError(previous, current, x, y, best_x, best_y - 1, UINT_MAX, compensate, patch), best,
+                                PatchError(previous, current, x, y, best_x, best_y + 1, UINT_MAX, compensate, patch));
+            points[count] = (Match){ x + half_patch - 39.5f, y + half_patch - 29.5f,
                                      best_x + fx, best_y + fy };
             ++count;
         }
@@ -303,11 +328,15 @@ static TrackResult TrackPass(const uint8_t *previous, const uint8_t *current, bo
 
 static void Track(const uint8_t *previous, const uint8_t *current)
 {
-    TrackResult result = TrackPass(previous, current, false);
+    TrackResult result = TrackPass(previous, current, false, PATCH);
     if (result != TRACK_VALID) {
-        result = TrackPass(previous, current, true);
+        result = TrackPass(previous, current, true, PATCH);
         if (result == TRACK_VALID) ++flow.brightness_recovered;
     }
+    /* A wider patch can resolve blurred floor details that are ambiguous in
+     * the normal window. Keep the same fit and image-coverage requirements. */
+    if (result != TRACK_VALID) result = TrackPass(previous, current, false, LARGE_PATCH);
+    if (result != TRACK_VALID) result = TrackPass(previous, current, false, SPARSE_PATCH);
     if (result == TRACK_VALID) ++flow.valid;
     else if (result == TRACK_TOO_FEW) ++flow.rejected_patches;
     else ++flow.rejected_agreement;

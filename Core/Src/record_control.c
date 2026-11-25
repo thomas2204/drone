@@ -94,15 +94,24 @@ static void Command(char *line)
         return;
     }
     const bool camera_only = strcmp(begin, "record cam") == 0;
-    if (!camera_only && strcmp(begin,"record")) {
+#if CAMERA_FLOW_MAVLINK
+    const bool flow_log = strcmp(begin, "flow log") == 0;
+#else
+    const bool flow_log = false;
+#endif
+    if (!camera_only && !flow_log && strcmp(begin,"record")) {
+#if CAMERA_FLOW_MAVLINK
+        Log("Commands: record, record cam, flow log, uwb zero, patrol, patrol stop, patrol land, patrol status\r\n");
+#else
         Log("Commands: record, record cam, uwb zero, patrol, patrol stop, patrol land, patrol status\r\n");
+#endif
         return;
     }
     if (camera_only && !APP_CAMERA_ENABLED) {
         Log("REC: normal camera unavailable in this build\r\n");
         return;
     }
-    const uint32_t devices = camera_only ? RECORD_CAMERA : BOTH;
+    const uint32_t devices = flow_log ? RECORD_FLOW_LOG : camera_only ? RECORD_CAMERA : BOTH;
     record_report.commands++;
     if (record_report.active) {
         record_report.busy_commands++;
@@ -120,7 +129,8 @@ static void Command(char *line)
     record_report.duration_ms=10000U;
     record_report.active=1;
     taskEXIT_CRITICAL();
-    Log(camera_only ? "REC: preparing normal camera for 10 seconds\r\n"
+    Log(flow_log ? "FLOW LOG: preparing 10-second EKF trace\r\n"
+        : camera_only ? "REC: preparing normal camera for 10 seconds\r\n"
         : "REC: preparing both cameras for 10 seconds\r\n");
 }
 
@@ -139,7 +149,9 @@ static void CommandTask(void *argument)
         /* Acknowledge the old session before parsing a new command. */
         if (!record_report.active && record_report.session!=completed_session) {
             completed_session=record_report.session; announced=false;
-            if (record_report.devices == RECORD_CAMERA)
+            if (record_report.devices == RECORD_FLOW_LOG)
+                Log(record_report.failed ? "FLOW LOG: failed\r\n" : "FLOW LOG: done\r\n");
+            else if (record_report.devices == RECORD_CAMERA)
                 Log(record_report.failed ? "REC: normal camera recording failed\r\n"
                     : "REC: done; normal camera file saved\r\n");
             else if (record_report.devices == RECORD_THERMAL)
@@ -172,7 +184,8 @@ static void CommandTask(void *argument)
             used=0; overflow=false;
         }
         if (record_report.started && record_report.active && !announced) {
-            Log(record_report.devices == RECORD_CAMERA ? "REC: recording normal camera for 10 seconds\r\n"
+            Log(record_report.devices == RECORD_FLOW_LOG ? "FLOW LOG: collecting for 10 seconds\r\n"
+                : record_report.devices == RECORD_CAMERA ? "REC: recording normal camera for 10 seconds\r\n"
                 : record_report.devices == RECORD_THERMAL ? "REC: recording thermal camera for 10 seconds\r\n"
                 : "REC: recording both cameras for 10 seconds\r\n");
             announced=true;

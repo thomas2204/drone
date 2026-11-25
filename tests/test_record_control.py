@@ -145,6 +145,20 @@ int main(void) {
     assert(record_report.active && !record_report.failed);
     RecordControl_Done(RECORD_CAMERA,true);
     assert(!record_report.active && record_report.done==RECORD_CAMERA);
+    feed("flow log\\n");run(3);
+#if CAMERA_FLOW_MAVLINK
+    assert(record_report.session==5 && record_report.devices==RECORD_FLOW_LOG);
+    assert(!RecordControl_TakeRequest(RECORD_CAMERA));
+    assert(!RecordControl_TakeRequest(RECORD_THERMAL));
+    assert(RecordControl_TakeRequest(RECORD_FLOW_LOG));
+    assert(RecordControl_WaitStart(RECORD_FLOW_LOG) && RecordControl_HasTime());
+    feed("record cam\\n");run(3);
+    assert(record_report.session==5 && record_report.busy_commands==2);
+    RecordControl_Done(RECORD_FLOW_LOG,true);
+    assert(!record_report.active && record_report.done==RECORD_FLOW_LOG);
+#else
+    assert(record_report.session==4 && !record_report.active);
+#endif
     assert(record_report.rx_bytes>0 && record_report.rx_overflows==0);
     puts("UART parsing, warmup, synchronization, deadline, busy/repeat, failure and tick wrap passed");
     return 0;
@@ -152,10 +166,12 @@ int main(void) {
 ''')
             compiler = 'C:/MinGW/bin/gcc.exe' if Path('C:/MinGW/bin/gcc.exe').exists() else shutil.which('gcc')
             executable = work / 'record-control-test.exe'
-            subprocess.run([compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror',
-                            '-I'+str(work), '-I'+str(ROOT / 'Core/Inc'),
-                            str(work / 'exercise.c'), '-o', str(executable)], check=True)
-            subprocess.run([str(executable)], check=True, timeout=10)
+            for flow_enabled in (0, 1):
+                subprocess.run([compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror',
+                                f'-DCAMERA_FLOW_MAVLINK={flow_enabled}',
+                                '-I'+str(work), '-I'+str(ROOT / 'Core/Inc'),
+                                str(work / 'exercise.c'), '-o', str(executable)], check=True)
+                subprocess.run([str(executable)], check=True, timeout=10)
 
 
 if __name__ == '__main__':

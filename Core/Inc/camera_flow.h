@@ -26,6 +26,14 @@ void CameraFlow_ReportCapture(void);
 typedef bool (*CameraFlowTraceWrite)(const void *data, size_t bytes);
 bool CameraFlow_WriteTrace(CameraFlowTraceWrite write);
 #if CAMERA_FLOW_MAVLINK
+typedef struct {
+    CameraFlowReference flow;
+    int16_t vx_mm_s, vy_mm_s, vz_mm_s;
+    uint16_t position_age_ms, ekf_age_ms, ekf_flags;
+    bool heartbeat_fresh, armed;
+    uint8_t flight_mode;
+} CameraFlowEkfSample;
+void MAVLink_GetFlowEkfSample(CameraFlowEkfSample *sample);
 void CameraFlow_Stream(const uint8_t *jpeg, size_t bytes, uint32_t capture_ms,
                        const CameraFlowReference *reference);
 typedef struct {

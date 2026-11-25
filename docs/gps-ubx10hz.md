@@ -10,7 +10,7 @@ NAV-PVT supplies position, MSL altitude, North/East/Down velocity, fix validity 
 
 No-fix PVT is forwarded as no fix without waiting for DOP. Corrupt UBX packets are rejected. Repeated PVT epochs do not refresh freshness. After UBX reception starts, data aged 500 ms or more stops forwarding; old NMEA data cannot silently replace it. Before the first PVT, the existing synchronized NMEA path remains available.
 
-Bluetooth still prints about once per second. The GPS receive/forwarding tasks run separately, so Bluetooth's print interval does not limit the GPS to 1 Hz.
+The GPS receive and forwarding tasks run separately from Bluetooth. Use Mission Planner to check the forwarded GPS data on current firmware.
 
 ## Wiring and firmware installation
 
@@ -22,13 +22,13 @@ Existing interfaces remain:
 
 1. Build/flash this STM32 project using the existing STM32Cube/ST-Link configuration, or load the packaged `stm32h743-gps-ubx10hz.elf` with ST-Link. The package's HEX is an alternative for STM32CubeProgrammer.
 2. Power the GPS and STM32 together. If the GPS is powered much later, reboot the STM32 after powering the GPS.
-3. Keep the vehicle disarmed for this data-path check. Open the HC-05 terminal and inspect the diagnostics below.
+3. Keep the vehicle disarmed and check `GPS_RAW_INT` in Mission Planner's MAVLink Inspector or in a new flight-controller log.
 
 This package is **not an ArduPilot APJ**. Do not install it through Mission Planner onto the FC. The FC firmware, parameters, compass calibration and yaw-source settings were not changed by this work. GSF has not been enabled.
 
-## Expected Bluetooth diagnostics
+## Bluetooth diagnostics from older firmware
 
-Example only; counters and measured rates vary:
+These sample messages help interpret older captures. Current builds omit the GPS Bluetooth output.
 
 ```text
 GPS TX=... ERR=0 LastFix=3
@@ -49,7 +49,7 @@ GPS VEL N=... E=... D=... mm/s hAcc=... vAcc=... mm sAcc=... mm/s
 
 `TX` counts a successful local UART transmission, not FC acknowledgement or EKF use. After the Bluetooth check, verify reception/update timing in Mission Planner's MAVLink Inspector / GPS_RAW_INT or a new FC log before changing yaw-source settings.
 
-## If the check fails
+## Troubleshooting older captures
 
 - `CFG=NAK`: the receiver rejected the configuration. Record the complete diagnostics; do not assume it is running at 10 Hz.
 - `CFG=TIMEOUT`: no matching ACK was received after three attempts, two seconds apart. Check GPS RX wiring, power and 115200 baud; restart the STM32 after correction. The receiver could have applied a command whose ACK was lost, so inspect PVT/DOP rate too.

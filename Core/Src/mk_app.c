@@ -14,6 +14,9 @@
 #if CAMERA_FLOW_BENCH
 #include "camera_flow.h"
 #endif
+#if PMW3901_FLOW_MAVLINK
+#include "pmw3901.h"
+#endif
 #include "patrol.h"
 
 #include <string.h>
@@ -66,6 +69,7 @@ static float patrol_slant_m;
 static uint8_t patrol_system_status;
 
 #if CAMERA_FLOW_MAVLINK
+static uint16_t flow_ekf_flags;
 static struct {
     uint32_t tx_count, rx_count, received_ms;
     float rate_x, rate_y;
@@ -173,6 +177,9 @@ static void ProcessMessage(
         case MAVLINK_MSG_ID_EKF_STATUS_REPORT: {
             mavlink_ekf_status_report_t ekf;
             mavlink_msg_ekf_status_report_decode(msg, &ekf);
+#if CAMERA_FLOW_MAVLINK
+            flow_ekf_flags = ekf.flags;
+#endif
             const uint16_t needed = EKF_ATTITUDE | EKF_VELOCITY_HORIZ |
                 EKF_VELOCITY_VERT | EKF_POS_HORIZ_ABS | EKF_POS_VERT_ABS;
             patrol_ekf_valid = (ekf.flags & needed) == needed &&
@@ -311,14 +318,15 @@ static int16_t ScaleImu(float value)
     return (int16_t)fmaxf(-32767.0f, fminf(32767.0f, value * 1000.0f));
 }
 
-void MAVLink_GetFlowReference(CameraFlowReference *reference)
-{
-    *reference = (CameraFlowReference){.imu_age_ms = UINT16_MAX, .tof_age_ms = UINT16_MAX};
+static const CameraFlowReference no_flow_reference = {
+    .imu_age_ms = UINT16_MAX, .tof_age_ms = UINT16_MAX,
 #if CAMERA_FLOW_MAVLINK
-    reference->fc_flow_age_ms = UINT16_MAX;
+    .fc_flow_age_ms = UINT16_MAX,
 #endif
-    if (!fc_mutex || xSemaphoreTake(fc_mutex, 0) != pdTRUE) return;
-    const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+};
+
+static void CopyFlowReference(CameraFlowReference *reference, uint32_t now)
+{
     const uint32_t imu_age = now - fc_data.last_attitude_ms;
     const uint32_t tof_age = now - patrol_range_ms;
     if (fc_data.attitude_count && imu_age < UINT16_MAX &&
@@ -348,27 +356,101 @@ void MAVLink_GetFlowReference(CameraFlowReference *reference)
         reference->fc_flow_quality = flow_link.quality;
     }
 #endif
+}
+
+void MAVLink_GetFlowReference(CameraFlowReference *reference)
+{
+    *reference = no_flow_reference;
+    if (!fc_mutex || xSemaphoreTake(fc_mutex, 0) != pdTRUE) return;
+    CopyFlowReference(reference, (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
     xSemaphoreGive(fc_mutex);
 }
 #endif
 
 #if CAMERA_FLOW_MAVLINK
-static void ForwardCameraFlow(uint32_t now)
+void MAVLink_GetFlowEkfSample(CameraFlowEkfSample *sample)
+{
+    *sample = (CameraFlowEkfSample){
+        .flow = no_flow_reference,
+        .position_age_ms = UINT16_MAX,
+        .ekf_age_ms = UINT16_MAX
+    };
+    if (!fc_mutex || xSemaphoreTake(fc_mutex, 0) != pdTRUE) return;
+    const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    const uint32_t position_age = now - patrol_position_ms;
+    const uint32_t ekf_age = now - patrol_ekf_ms;
+    CopyFlowReference(&sample->flow, now);
+    sample->heartbeat_fresh = fc_data.heartbeat_count &&
+                              now - fc_data.last_heartbeat_ms < 2000U;
+    sample->armed = fc_data.armed;
+    sample->flight_mode = (uint8_t)fc_data.flight_mode;
+    if (patrol_position_ms && position_age < UINT16_MAX &&
+        isfinite(patrol_input.vx) && isfinite(patrol_input.vy) && isfinite(patrol_input.vz)) {
+        sample->position_age_ms = (uint16_t)position_age;
+        sample->vx_mm_s = ScaleImu(patrol_input.vx);
+        sample->vy_mm_s = ScaleImu(patrol_input.vy);
+        sample->vz_mm_s = ScaleImu(patrol_input.vz);
+    }
+    if (patrol_ekf_ms && ekf_age < UINT16_MAX) {
+        sample->ekf_age_ms = (uint16_t)ekf_age;
+        sample->ekf_flags = flow_ekf_flags;
+    }
+    xSemaphoreGive(fc_mutex);
+}
+
+#if PMW3901_BENCH_DIAGNOSTICS
+static void ReportPmw3901Diagnostics(const PMW3901Reading *sample)
+{
+    static uint32_t last_sequence;
+    if (fc_data.armed || !sample->ready || sample->sequence == last_sequence) return;
+    last_sequence = sample->sequence;
+    static const char name[10] = "PMW3901";
+    mavlink_message_t message;
+    uint8_t wire[MAVLINK_MAX_PACKET_LEN];
+    mavlink_get_channel_status(MAVLINK_COMM_0)->flags &= ~MAVLINK_STATUS_FLAG_OUT_MAVLINK1;
+    mavlink_msg_debug_vect_pack_chan(fc_system_id, MAV_COMP_ID_ONBOARD_COMPUTER, MAVLINK_COMM_0,
+        &message, name, (uint64_t)sample->capture_ms * 1000U,
+        sample->shutter, sample->motion, sample->observation);
+    const uint16_t length = mavlink_msg_to_send_buffer(wire, &message);
+    HAL_UART_Transmit(&MAV_UART, wire, length, 5);
+}
+#endif
+
+static void ForwardOpticalFlow(uint32_t now)
 {
     static uint32_t last_sequence;
     static uint32_t last_report_request_ms;
     static bool requested_report;
+    if (!fc_data.heartbeat_count || now - fc_data.last_heartbeat_ms >= 2000U) return;
+
+    int16_t dx = 0, dy = 0;
+#if PMW3901_FLOW_MAVLINK
+    PMW3901Reading sample;
+    PMW3901_Read(&sample);
+    if (now - sample.capture_ms >= PMW3901_MAX_SAMPLE_MS) return;
+#if PMW3901_BENCH_DIAGNOSTICS
+    ReportPmw3901Diagnostics(&sample);
+#endif
+    if (!sample.valid || sample.sequence == last_sequence) return;
+    const float scale = PMW3901_RADIANS_PER_COUNT * 1000.0f / (float)sample.interval_ms;
+    dx = sample.dx;
+    dy = sample.dy;
+    const float rate_x = dx * scale;
+    const float rate_y = dy * scale;
+#else
     CameraFlowReading sample;
-    if (!fc_data.heartbeat_count || fc_data.armed || now - fc_data.last_heartbeat_ms >= 2000U ||
-        !CameraFlow_Read(&sample) || sample.sequence == last_sequence ||
+    if (!CameraFlow_Read(&sample) || sample.sequence == last_sequence ||
         !patrol_range_valid || now-patrol_range_ms >= 200U ||
         !fc_data.attitude_count || now-fc_data.last_attitude_ms >= 150U) return;
+    const float rate_x = sample.rate_x;
+    const float rate_y = sample.rate_y;
+#endif
     mavlink_message_t message;
     uint8_t wire[MAVLINK_MAX_PACKET_LEN];
     mavlink_get_channel_status(MAVLINK_COMM_0)->flags &= ~MAVLINK_STATUS_FLAG_OUT_MAVLINK1;
     mavlink_msg_optical_flow_pack_chan(fc_system_id, MAV_COMP_ID_ONBOARD_COMPUTER,
         MAVLINK_COMM_0, &message, (uint64_t)sample.capture_ms * 1000U,
-        0, 0, 0, 0.0f, 0.0f, sample.quality, -1.0f, sample.rate_x, sample.rate_y);
+        0, dx, dy, 0.0f, 0.0f, sample.quality, -1.0f, rate_x, rate_y);
     uint16_t length = mavlink_msg_to_send_buffer(wire, &message);
     if (HAL_UART_Transmit(&MAV_UART, wire, length, 5) != HAL_OK) return;
     last_sequence = sample.sequence;
@@ -600,7 +682,7 @@ void MAVLink_Task(void)
 
         ForwardGps((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
 #if CAMERA_FLOW_MAVLINK
-        ForwardCameraFlow((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
+        ForwardOpticalFlow((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
 #endif
         RequestArmStatus((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
         PatrolTransmit((uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS));
