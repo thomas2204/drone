@@ -62,7 +62,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define STATUS_LED_COUNT 80U
+#define STATUS_LED_STEP 5U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -208,7 +209,7 @@ void MX_FREERTOS_Init(void) {
   UWB_RangeInit();
   MAVLink_AppInit();
   GPS_RawInit();
-  if (LED_Strip_Init(80) != HAL_OK ||
+  if (LED_Strip_Init(STATUS_LED_COUNT) != HAL_OK ||
     LED_Strip_Fill(0, 0, 0, 0) != HAL_OK ||
     LED_Strip_Show() != HAL_OK) {
     Error_Handler();
@@ -429,37 +430,23 @@ void BLUETOOTH(void *argument)
 void led_blink1(void *argument)
 {
   /* USER CODE BEGIN led_blink1 */
-  /* Infinite loop */
+    FC_Telemetry_t fc;
+    for (;;) {
+        HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
+        if (!LED_Strip_IsBusy()) {
+            const bool received = MAVLink_GetTelemetry(&fc);
+            const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+            const FC_ArmStatus status = received ? FC_GetArmStatus(&fc, now) : FC_ARM_DISCONNECTED;
+            const bool show_green = status == FC_ARM_READY || status == FC_ARM_ALREADY_ARMED;
+            const uint8_t red = show_green ? 0U : 255U;
+            const uint8_t green = show_green ? 255U : 0U;
 
-uint8_t phase = 0;
-const uint8_t colours[3][3] = {
-    {0, 255, 0},  // Green
-    {255, 0, 0},  // Red
-    {0, 0, 255}   // Blue
-};
-for (;;) {
-    HAL_GPIO_TogglePin(GPIOI, GPIO_PIN_1);
-    osDelay(500);
-    if (!LED_Strip_IsBusy()) {
-       // LED_Strip_Fill(255, 0, 0, 8);
-   
-        for (int i = 0; i < 80; i += 5) {
-            int c = ((i / 4) + phase) % 3;
-
-            LED_Strip_Set(i,
-                          colours[c][0],
-                          colours[c][1],
-                          colours[c][2],
-                          100);
+            for (uint16_t i = 0; i < STATUS_LED_COUNT; i += STATUS_LED_STEP)
+                LED_Strip_Set(i, red, green, 0U, 100U);
+            LED_Strip_Show();
         }
-
-        if (LED_Strip_Show() == HAL_OK) {
-            phase = (phase + 1) % 3;
-        }
-    } 
-    LED_Strip_Show();                 // Apply all changes together
-}
-  
+        osDelay(500);
+    }
   /* USER CODE END led_blink1 */
 }
 

@@ -18,6 +18,9 @@
 #include "pmw3901.h"
 #endif
 #include "patrol.h"
+#if RC7_GUIDED_TEST
+#include "rc7_guided.h"
+#endif
 
 #include <string.h>
 #include <math.h>
@@ -67,6 +70,13 @@ static uint8_t patrol_range_id;
 static bool patrol_range_seen;
 static float patrol_slant_m;
 static uint8_t patrol_system_status;
+#if RC7_GUIDED_TEST
+static Rc7Guided rc7_guided;
+static bool rc7_relative_nav, rc7_option_clear;
+static bool rc7_sensors_healthy;
+static uint16_t rc7_pwm;
+static uint32_t rc7_rx_ms, rc7_option_ms;
+#endif
 
 #if CAMERA_FLOW_MAVLINK
 static uint16_t flow_ekf_flags;
@@ -163,6 +173,12 @@ static void ProcessMessage(
             enabled &= ~MAV_SYS_STATUS_PREARM_CHECK;
             patrol_input.healthy = enabled != 0U &&
                 (enabled & ~state.onboard_control_sensors_health) == 0U;
+#if RC7_GUIDED_TEST
+            /* The relative EKF position, not a GPS fix, gates this sequence. */
+            const uint32_t relative_sensors = enabled & ~MAV_SYS_STATUS_SENSOR_GPS;
+            rc7_sensors_healthy = relative_sensors != 0U &&
+                (relative_sensors & ~state.onboard_control_sensors_health) == 0U;
+#endif
             break;
         }
 
@@ -184,9 +200,36 @@ static void ProcessMessage(
                 EKF_VELOCITY_VERT | EKF_POS_HORIZ_ABS | EKF_POS_VERT_ABS;
             patrol_ekf_valid = (ekf.flags & needed) == needed &&
                 !(ekf.flags & (EKF_UNINITIALIZED | EKF_CONST_POS_MODE | EKF_GPS_GLITCHING));
+#if RC7_GUIDED_TEST
+            const uint16_t relative_needed = (needed & ~EKF_POS_HORIZ_ABS) | EKF_POS_HORIZ_REL;
+            rc7_relative_nav = (ekf.flags & relative_needed) == relative_needed &&
+                !(ekf.flags & (EKF_UNINITIALIZED | EKF_CONST_POS_MODE));
+#endif
             patrol_ekf_ms=now;
             break;
         }
+#if RC7_GUIDED_TEST
+        case MAVLINK_MSG_ID_RC_CHANNELS: {
+            if (fc_data.heartbeat_count == 0U || msg->sysid != fc_system_id ||
+                msg->compid != MAV_COMP_ID_AUTOPILOT1) break;
+            mavlink_rc_channels_t rc;
+            mavlink_msg_rc_channels_decode(msg, &rc);
+            rc7_pwm = rc.chancount >= 7U ? rc.chan7_raw : 0U;
+            rc7_rx_ms = now;
+            break;
+        }
+        case MAVLINK_MSG_ID_PARAM_VALUE: {
+            if (fc_data.heartbeat_count == 0U || msg->sysid != fc_system_id ||
+                msg->compid != MAV_COMP_ID_AUTOPILOT1) break;
+            mavlink_param_value_t parameter;
+            mavlink_msg_param_value_decode(msg, &parameter);
+            if (strncmp(parameter.param_id, "RC7_OPTION", sizeof(parameter.param_id)) == 0) {
+                rc7_option_clear = parameter.param_value == 0.0f;
+                rc7_option_ms = now;
+            }
+            break;
+        }
+#endif
         case MAVLINK_MSG_ID_DISTANCE_SENSOR: {
             mavlink_distance_sensor_t range;
             mavlink_msg_distance_sensor_decode(msg, &range);
@@ -501,16 +544,32 @@ static void PatrolTransmit(uint32_t now)
         now-last_stream_request >= 1000U) {
         static const uint32_t ids[] = {MAVLINK_MSG_ID_LOCAL_POSITION_NED,
             MAVLINK_MSG_ID_ATTITUDE, MAVLINK_MSG_ID_DISTANCE_SENSOR,
-            MAVLINK_MSG_ID_EKF_STATUS_REPORT, MAVLINK_MSG_ID_EXTENDED_SYS_STATE};
+            MAVLINK_MSG_ID_EKF_STATUS_REPORT, MAVLINK_MSG_ID_EXTENDED_SYS_STATE,
+#if RC7_GUIDED_TEST
+            MAVLINK_MSG_ID_RC_CHANNELS,
+#endif
+        };
         mavlink_message_t message;
         uint8_t wire[MAVLINK_MAX_PACKET_LEN];
-        unsigned slot=stream++ % 5U;
+        const unsigned slot = stream++ % (sizeof(ids) / sizeof(ids[0]));
+        const float interval_us = slot < 3U || ids[slot] == MAVLINK_MSG_ID_RC_CHANNELS ?
+            100000.0f : 500000.0f;
         mavlink_msg_command_long_pack_chan(fc_system_id, MAV_COMP_ID_ONBOARD_COMPUTER,
             MAVLINK_COMM_0, &message, fc_system_id, MAV_COMP_ID_AUTOPILOT1,
             MAV_CMD_SET_MESSAGE_INTERVAL, 0, (float)ids[slot],
-            slot < 3U ? 100000.0f : 500000.0f, 0,0,0,0,0);
+            interval_us, 0,0,0,0,0);
         uint16_t size=mavlink_msg_to_send_buffer(wire,&message);
         HAL_UART_Transmit(&MAV_UART,wire,size,5);
+#if RC7_GUIDED_TEST
+        if (slot == 0U && rc7_guided.state == RC7_IDLE) {
+            static const char rc7_option_id[16] = "RC7_OPTION";
+            mavlink_msg_param_request_read_pack_chan(fc_system_id,
+                MAV_COMP_ID_ONBOARD_COMPUTER, MAVLINK_COMM_0, &message, fc_system_id,
+                MAV_COMP_ID_AUTOPILOT1, rc7_option_id, -1);
+            size = mavlink_msg_to_send_buffer(wire, &message);
+            HAL_UART_Transmit(&MAV_UART, wire, size, 5);
+        }
+#endif
         last_stream_request=now;
     }
     if (now-last_tick < 200U) return;
@@ -533,7 +592,26 @@ static void PatrolTransmit(uint32_t now)
     input.tof_ok=patrol_range_valid && patrol_range_ms != 0U && now-patrol_range_ms < 500U &&
         fabsf(fc_data.roll) < 0.5f && fabsf(fc_data.pitch) < 0.5f;
     input.height=patrol_slant_m*cosf(fc_data.roll)*cosf(fc_data.pitch);
-    PatrolAction action=Patrol_Update(&patrol,&input,now,request);
+    PatrolAction action = {0};
+#if RC7_GUIDED_TEST
+    if (patrol.state == PATROL_IDLE) {
+        PatrolInput rc7_input = input;
+        rc7_input.healthy = rc7_sensors_healthy &&
+            (patrol_system_status == MAV_STATE_STANDBY || patrol_system_status == MAV_STATE_ACTIVE);
+        rc7_input.nav_ok = rc7_relative_nav && patrol_ekf_ms != 0U &&
+            now - patrol_ekf_ms < 1500U;
+        const bool link_fresh = fc_data.heartbeat_count != 0U &&
+            now - fc_data.last_heartbeat_ms < 1500U;
+        const bool option_ready = rc7_option_clear &&
+            (rc7_guided.state != RC7_IDLE || now - rc7_option_ms < 8000U);
+        const uint16_t pwm = option_ready && now - rc7_rx_ms < 500U ? rc7_pwm : 0U;
+        action = Rc7Guided_Update(&rc7_guided, &rc7_input, link_fresh, pwm, now);
+    } else {
+        rc7_guided = (Rc7Guided){0};
+    }
+    if (rc7_guided.state == RC7_IDLE && action.type == PATROL_NONE)
+#endif
+        action = Patrol_Update(&patrol, &input, now, request);
     xSemaphoreGive(fc_mutex);
     if (action.type == PATROL_NONE) return;
     mavlink_message_t message;

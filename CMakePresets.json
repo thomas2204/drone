@@ -36,6 +36,13 @@
             }
         },
         {
+            "name": "DebugRc7Guided",
+            "inherits": "Debug",
+            "cacheVariables": {
+                "RC7_GUIDED_TEST": "ON"
+            }
+        },
+        {
             "name": "Release",
             "inherits": "default",
             "cacheVariables": {
@@ -55,6 +62,10 @@
         {
             "name": "DebugFlowHw",
             "configurePreset": "DebugFlowHw"
+        },
+        {
+            "name": "DebugRc7Guided",
+            "configurePreset": "DebugRc7Guided"
         },
         {
             "name": "Release",

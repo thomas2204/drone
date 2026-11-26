@@ -36,6 +36,12 @@ enable_language(C ASM)
 
 add_executable(${CMAKE_PROJECT_NAME})
 
+option(RC7_GUIDED_TEST "Enable the manually armed RC7 Guided test" OFF)
+if(RC7_GUIDED_TEST)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE Core/Src/rc7_guided.c)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE RC7_GUIDED_TEST=1)
+endif()
+
 option(BOARD_BENCH_TEST "Run SDRAM diagnostics instead of application tasks" OFF)
 option(BOARD_CAMERA_TEST "Record OV2640 H.264 MP4 to SD using internal SRAM" OFF)
 option(CAMERA_RECORDING "Include MP4 recording in the normal application" ON)
