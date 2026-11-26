@@ -19,10 +19,17 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "FreeRTOS.h"
+#include "FreeRTOSConfig.h"
 #include "task.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
+#include "MLX90640_I2C_Driver.h"
+#include "thermal_dma.h"
+#include "thermal_test.h"
+#include "record_control.h"
+#include "LD6002_UART.h"
+#include "LD6002.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -131,6 +138,14 @@ const osThreadAttr_t thermalTask_attributes = {
   .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+
+osThreadId_t LD6002TaskHandle;
+extern void LD6002_Task(void *arg);
+const osThreadAttr_t LD6002_attributes = {
+  .name = "LD6002",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* Definitions for i2c1Mutex */
 osMutexId_t i2c1MutexHandle;
 const osMutexAttr_t i2c1Mutex_attributes = {
@@ -150,6 +165,7 @@ void StartMavlinkTask(void *argument);
 void StartGpsTask(void *argument);
 void audio(void *argument);
 void StartThermalTask(void *argument);
+void LD6002(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -256,6 +272,8 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of thermalTask */
   thermalTaskHandle = osThreadNew(StartThermalTask, NULL, &thermalTask_attributes);
+  /* creation of LD6002Task */
+  LD6002TaskHandle = osThreadNew(LD6002, NULL, &LD6002_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   configASSERT(RecordControl_Init());
@@ -297,6 +315,8 @@ void MX_FREERTOS_Init(void) {
   configASSERT(audio1Handle != NULL);
   configASSERT(thermalTaskHandle != NULL);
   configASSERT(i2c1MutexHandle != NULL);
+  configASSERT(LD6002TaskHandle != NULL);
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -531,7 +551,10 @@ void StartThermalTask(void *argument)
   /* Integrate camera initialization and acquisition here using hi2c1.
    * Acquire i2c1MutexHandle around each complete I2C operation; release it
    * before temperature calculations, frame waits, logging or display work.
-   * OV2640 SCCB and MLX90640 register operations share this mutex. */
+   * There is deliberately no camera traffic until its driver is imported.
+    OV2640 SCCB and MLX90640 register operations share this mutex. */
+   MLX_I2C_DmaInit();
+   MLX90640_I2CInit();
   thermal_test_run();
   
   /* USER CODE END StartThermalTask */
@@ -539,6 +562,12 @@ void StartThermalTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-
+void LD6002(void *argument)
+{
+  /* USER CODE BEGIN LD6002_Task */
+  LD6002_Task(argument);      /* never returns */
+  for (;;) osDelay(1000); 
+  /* USER CODE END LD6002_Task */
+}
 /* USER CODE END Application */
 

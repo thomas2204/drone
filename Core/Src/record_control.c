@@ -9,6 +9,8 @@
 #include "uwb_range.h"
 #include <string.h>
 #include <ctype.h>
+#include "LD6002_UART.h"
+
 
 #define RX_SIZE 128U
 #define BOTH (RECORD_THERMAL | (APP_CAMERA_ENABLED ? RECORD_CAMERA : 0U))
@@ -126,12 +128,12 @@ static void Command(char *line)
     record_report.pending = devices;
     record_report.ready=record_report.done=record_report.failed=0;
     record_report.start_ms=record_report.started=0;
-    record_report.duration_ms=10000U;
+    record_report.duration_ms=30000U;
     record_report.active=1;
     taskEXIT_CRITICAL();
     Log(flow_log ? "FLOW LOG: preparing 10-second EKF trace\r\n"
-        : camera_only ? "REC: preparing normal camera for 10 seconds\r\n"
-        : "REC: preparing both cameras for 10 seconds\r\n");
+        : camera_only ? "REC: preparing normal camera for 30 seconds\r\n"
+        : "REC: preparing both cameras for 30 seconds\r\n");
 }
 
 static void CommandTask(void *argument)
@@ -219,8 +221,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
-    if (uart!=&huart7) return;
+    if (uart == &huart3) { LD6002_RxRestart(); return; }
+    if (uart != &huart7) return;
     record_report.rx_errors++;
-    if (uart->RxState==HAL_UART_STATE_READY)
-        (void)HAL_UART_Receive_IT(uart,&received_byte,1);
+    if (uart->RxState == HAL_UART_STATE_READY)
+        (void)HAL_UART_Receive_IT(uart, &received_byte, 1);
 }
