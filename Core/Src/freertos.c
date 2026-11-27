@@ -30,6 +30,7 @@
 #include "record_control.h"
 #include "LD6002_UART.h"
 #include "LD6002.h"
+#include "uwb_log.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -276,6 +277,10 @@ void MX_FREERTOS_Init(void) {
   LD6002TaskHandle = osThreadNew(LD6002, NULL, &LD6002_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+static const osThreadAttr_t uwb_log_attributes = {
+    .name = "uwb_log", .stack_size = 2048, .priority = osPriorityLow
+};
+configASSERT(osThreadNew(UWB_LogTask, NULL, &uwb_log_attributes) != NULL);
   configASSERT(RecordControl_Init());
 #if APP_CAMERA_ENABLED
   static const osThreadAttr_t recorder_attributes = {

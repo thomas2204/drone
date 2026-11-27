@@ -23,7 +23,7 @@
 extern I2C_HandleTypeDef hi2c1;
 
 #define MLX_ADDR      0x33
-#define REFRESH_RATE  0x05      /* 0x03 = 4 Hz, 0x04 = 8 Hz per subpage.
+#define REFRESH_RATE  0x04     /* 0x03 = 4 Hz, 0x04 = 8 Hz per subpage.
                                    A full image needs 2 subpages, so the
                                    video frame rate is about half of this. */
 #define EMISSIVITY    0.95f

@@ -199,7 +199,6 @@ static int render(const float *To)
     return 0;
 }
 
-/* ---- public API ---- */
 int avi_open(const char *name)
 {
     if (!tables_ready) tables_init();
