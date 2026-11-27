@@ -7,7 +7,8 @@ static PatrolAction tick(Rc7Guided *test, PatrolInput *in, uint16_t pwm,
                          uint32_t *now)
 {
     *now += 200U;
-    return Rc7Guided_Update(test, in, true, pwm, *now);
+    return Rc7Guided_Update(test, in, (uint16_t)lroundf(in->height * 100.0f),
+                            true, pwm, *now);
 }
 
 static void hold_switch(Rc7Guided *test, PatrolInput *in, uint16_t pwm,
@@ -32,6 +33,22 @@ int main(void)
     hold_switch(&test, &in, 1500U, &now, 8U);
     assert(test.state == RC7_IDLE);
 
+    /* The 10 cm sensor reading projects slightly below 10 cm after tilt correction. */
+    Rc7Guided minimum_range = test;
+    Rc7Guided below_minimum = test;
+    uint32_t boundary_now = now;
+    in.height = 0.10f * cosf(0.31f * 0.0174532925f);
+    for (unsigned i = 0; i < 11U; ++i) {
+        boundary_now += 200U;
+        uint16_t pwm = i < 8U ? 1000U : 1500U;
+        PatrolAction at_minimum = Rc7Guided_Update(&minimum_range, &in, 10U, true, pwm, boundary_now);
+        PatrolAction below = Rc7Guided_Update(&below_minimum, &in, 9U, true, pwm, boundary_now);
+        assert(at_minimum.type == (i == 10U ? PATROL_TAKEOFF_CMD : PATROL_NONE));
+        if (i == 10U) assert(fabsf(at_minimum.z - 0.50f) < 0.001f);
+        assert(below.type == PATROL_NONE);
+    }
+    in.height = 0.15f;
+
     Rc7Guided too_fast = test;
     in.vz = -0.20f;
     hold_switch(&too_fast, &in, 1000U, &now, 8U);
@@ -47,26 +64,60 @@ int main(void)
     hold_switch(&test, &in, 1500U, &now, 4U);
     assert(test.state == RC7_TAKEOFF);
 
+    Rc7Guided false_climb = test;
+    PatrolInput false_height = in;
+    false_height.z = -0.39f;
+    action = Rc7Guided_Update(&false_climb, &false_height, 15U, true, 1500U, now + 200U);
+    assert(action.type == PATROL_NONE && false_climb.state == RC7_TAKEOFF);
+    false_height.z = -0.41f;
+    action = Rc7Guided_Update(&false_climb, &false_height, 15U, true, 1500U, now + 400U);
+    assert(action.type == PATROL_SET_MODE && action.mode == 9U);
+
     in.on_ground = false;
     in.vz = 0.0f;
-    in.height = 0.43f;
-    in.z = -0.28f;
+    in.height = 0.19f;
+    in.z = -0.04f;
+    assert(tick(&test, &in, 1500U, &now).type == PATROL_NONE);
+    assert(test.state == RC7_TAKEOFF);
+    in.height = 0.30f;
+    in.z = -0.15f;
     action = tick(&test, &in, 1500U, &now);
-    assert(action.type == PATROL_TARGET && action.z < in.z);
+    assert(action.type == PATROL_NONE && test.state == RC7_TAKEOFF);
+    in.height = 0.39f;
+    in.z = -0.24f;
+    action = tick(&test, &in, 1500U, &now);
+    assert(action.type == PATROL_NONE && test.state == RC7_TAKEOFF);
+    Rc7Guided incomplete_takeoff = test;
+    action = Rc7Guided_Update(&incomplete_takeoff, &in, 39U, true, 1500U,
+                              test.started_ms + 12000U);
+    assert(action.type == PATROL_SET_MODE && action.mode == 9U);
+
     for (unsigned i = 0; i < 8U; ++i) {
         in.height = i % 2U == 0U ? 0.55f : 0.45f;
         in.z = 0.15f - in.height;
         action = tick(&test, &in, 1500U, &now);
-        assert(test.state == RC7_HOVER && action.y == 0.0f);
+        assert(test.state == RC7_TAKEOFF && action.type == PATROL_NONE);
     }
     in.height = 0.50f;
     in.z = -0.35f;
     in.vz = 0.18f;
     for (unsigned i = 0; i < 7U; ++i) {
         action = tick(&test, &in, 1500U, &now);
-        assert(test.state == RC7_HOVER && action.y == 0.0f);
+        assert(test.state == RC7_TAKEOFF && action.type == PATROL_NONE);
     }
     in.vz = 0.0f;
+    hold_switch(&test, &in, 1500U, &now, 5U);
+    action = tick(&test, &in, 1500U, &now);
+    assert(test.state == RC7_HOVER && action.type == PATROL_TARGET);
+    const float hover_z = action.z;
+    Rc7Guided drifting = test;
+    in.height = 0.53f;
+    in.z = -0.45f;
+    action = Rc7Guided_Update(&drifting, &in, 53U, true, 1500U, now + 200U);
+    assert(action.type == PATROL_TARGET && action.z == hover_z);
+    in.height = 0.50f;
+    in.z = -0.35f;
+
     Rc7Guided cancelled = test;
     uint32_t cancel_now = now;
     for (unsigned i = 0; i < 4U; ++i) tick(&cancelled, &in, 2000U, &cancel_now);
@@ -75,9 +126,9 @@ int main(void)
     assert(cancelled.state == RC7_HOVER && cancelled.forward_used);
 
     Rc7Guided timeout = test;
-    in.height = 0.70f;
-    in.z = -0.55f;
-    action = Rc7Guided_Update(&timeout, &in, true, 1500U, timeout.started_ms + 8000U);
+    in.height = 0.35f;
+    in.z = -0.20f;
+    action = Rc7Guided_Update(&timeout, &in, 35U, true, 1500U, timeout.started_ms + 8000U);
     assert(action.type == PATROL_SET_MODE && action.mode == 9U);
     in.height = 0.50f;
     in.z = -0.35f;
@@ -96,29 +147,51 @@ int main(void)
     assert(interrupted.state == RC7_HOVER && action.y == in.y);
 
     Rc7Guided too_high = test;
-    in.height = 0.86f;
+    in.height = 1.01f;
     in.z = 0.15f - in.height;
     action = tick(&too_high, &in, 1500U, &interrupt_now);
     assert(action.type == PATROL_SET_MODE && action.mode == 9U);
     in.height = 0.50f;
     in.z = -0.35f;
-    for (unsigned i = 0; i < 55U; ++i) {
+    for (unsigned i = 0; i < 30U && test.state == RC7_FORWARD; ++i) {
         action = tick(&test, &in, 1500U, &now);
         assert(action.type == PATROL_TARGET && fabsf(action.x) < 0.001f);
-        assert(action.y - in.y <= 0.051f);
+        assert(fabsf(action.y - in.y) <= 0.051f);
         in.x = action.x;
         in.y = action.y;
     }
-    assert(test.state == RC7_HOVER && test.forward_used && fabsf(in.y - 1.0f) < 0.01f);
+    assert(test.state == RC7_RETURN && test.forward_used && in.y >= 0.94f);
+    assert(test.target_x == test.origin_x && test.target_y == test.origin_y);
+
+    Rc7Guided return_timeout = test;
+    action = Rc7Guided_Update(&return_timeout, &in, 50U, true, 1500U,
+                              test.started_ms + 15000U);
+    assert(action.type == PATROL_SET_MODE && action.mode == 9U);
+
+    Rc7Guided return_cancelled = test;
+    cancel_now = now;
+    for (unsigned i = 0; i < 3U; ++i)
+        action = tick(&return_cancelled, &in, 2000U, &cancel_now);
+    assert(return_cancelled.state == RC7_HOVER && action.y == in.y);
+
+    for (unsigned i = 0; i < 30U && test.state == RC7_RETURN; ++i) {
+        action = tick(&test, &in, 1500U, &now);
+        assert(action.type == PATROL_TARGET && fabsf(action.x) < 0.001f);
+        assert(action.y <= in.y && in.y - action.y <= 0.051f);
+        assert(action.z == hover_z && action.yaw == in.yaw);
+        in.x = action.x;
+        in.y = action.y;
+    }
+    assert(test.state == RC7_HOVER && test.forward_used && fabsf(in.y) < 0.01f);
     for (unsigned i = 0; i < 4U; ++i) tick(&test, &in, 1500U, &now);
     for (unsigned i = 0; i < 8U; ++i)
-        assert(fabsf(tick(&test, &in, 2000U, &now).y - 1.0f) < 0.01f);
+        assert(fabsf(tick(&test, &in, 2000U, &now).y) < 0.01f);
 
     Rc7Guided overshoot = test;
     in.y = 1.80f;
     action = tick(&overshoot, &in, 2000U, &now);
     assert(action.type == PATROL_SET_MODE && action.mode == 9U);
-    in.y = 1.0f;
+    in.y = 0.0f;
 
     Rc7Guided takeover = test;
     in.mode = 5U;
@@ -134,7 +207,7 @@ int main(void)
     in.tof_ok = true;
 
     Rc7Guided lost = test;
-    assert(Rc7Guided_Update(&lost, &in, false, 0U, now).type == PATROL_NONE);
+    assert(Rc7Guided_Update(&lost, &in, 50U, false, 0U, now).type == PATROL_NONE);
     in.armed = false;
     hold_switch(&lost, &in, 1500U, &now, 6U);
     in.armed = true;

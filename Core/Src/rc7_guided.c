@@ -5,15 +5,19 @@
 #define GUIDED 4U
 #define LAND 9U
 #define TAKEOFF_COMMAND 22U
-#define TAKEOFF_HEIGHT_M 0.50f
-#define FLOOR_HEIGHT_M 0.50f
+#define HOVER_HEIGHT_M 0.50f
+#define LIFTOFF_MIN_RISE_M 0.10f
 #define HOVER_HEIGHT_TOLERANCE_M 0.10f
 #define HOVER_RANGE_CHANGE_M 0.03f
-#define MAX_FLOOR_HEIGHT_M 0.85f
+#define MAX_RISE_M 0.85f
+#define MAX_HEIGHT_DISAGREEMENT_M 0.40f
 #define HOVER_ACQUIRE_TIMEOUT_MS 8000U
 #define TAKEOFF_MAX_VERTICAL_SPEED_M_S 0.20f
 #define FORWARD_DISTANCE_M 1.0f
 #define MAX_HORIZONTAL_DISPLACEMENT_M (FORWARD_DISTANCE_M + 0.75f)
+#define LEG_TIMEOUT_MS 15000U
+#define POSITION_TOLERANCE_M 0.15f
+#define POSITION_STEP_M 0.05f
 
 enum { SWITCH_UNKNOWN, SWITCH_LOW, SWITCH_MID, SWITCH_HIGH };
 
@@ -56,7 +60,8 @@ static void hold_here(Rc7Guided *test, const PatrolInput *in)
 }
 
 PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
-                             bool heartbeat_fresh, uint16_t pwm, uint32_t now)
+                             uint16_t slant_cm, bool heartbeat_fresh,
+                             uint16_t pwm, uint32_t now)
 {
     const PatrolAction none = {0};
     if (!heartbeat_fresh || pwm < 900U || pwm > 2100U) {
@@ -75,8 +80,9 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
 
     const bool valid = usable(in);
     if (test->state == RC7_IDLE) {
-        const bool ready = valid && in->on_ground && in->height >= 0.10f &&
-            in->height <= 0.35f && fabsf(in->vz) < TAKEOFF_MAX_VERTICAL_SPEED_M_S &&
+        /* Apply the sensor's startup window before projecting range onto vertical. */
+        const bool ready = valid && in->on_ground && slant_cm >= 10U &&
+            slant_cm <= 35U && fabsf(in->vz) < TAKEOFF_MAX_VERTICAL_SPEED_M_S &&
             hypotf(in->vx, in->vy) < 0.15f;
         if (ready && !test->start_qualified) test->qualified_ms = now;
         test->start_qualified = ready;
@@ -94,16 +100,16 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
         test->yaw = in->yaw;
         test->forward_used = false;
         test->settling = false;
-        /* Guided interprets NAV_TAKEOFF above terrain or home depending on
-         * its rangefinder setup. Start conservatively in either frame. */
-        return (PatrolAction){.type = PATROL_TAKEOFF_CMD, .z = TAKEOFF_HEIGHT_M};
+        /* With rangefinder terrain enabled, Guided expects height above the floor. */
+        return (PatrolAction){.type = PATROL_TAKEOFF_CMD, .z = HOVER_HEIGHT_M};
     }
 
+    const float initial_height = test->floor_reference - test->origin_z;
     if (test->state != RC7_LANDING &&
-        (edge == SWITCH_LOW || !valid || in->height > MAX_FLOOR_HEIGHT_M ||
+        (edge == SWITCH_LOW || !valid || in->height - initial_height > MAX_RISE_M ||
          hypotf(in->x - test->origin_x, in->y - test->origin_y) > MAX_HORIZONTAL_DISPLACEMENT_M ||
          fabsf(in->z - test->origin_z) > 1.10f ||
-         fabsf(in->z + in->height - test->floor_reference) > 0.30f))
+         fabsf(in->z + in->height - test->floor_reference) > MAX_HEIGHT_DISAGREEMENT_M))
         start_landing(test, now);
 
     if (test->state == RC7_TAKEOFF &&
@@ -111,7 +117,8 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
          (in->ack_serial != test->ack_serial && in->ack_command == TAKEOFF_COMMAND &&
           in->ack_result != 0U && in->ack_result != 5U)))
         start_landing(test, now);
-    if (test->state == RC7_FORWARD && now - test->started_ms >= 15000U)
+    if ((test->state == RC7_FORWARD || test->state == RC7_RETURN) &&
+        now - test->started_ms >= LEG_TIMEOUT_MS)
         start_landing(test, now);
     if (edge == SWITCH_HIGH) test->forward_used = true;
     if (test->state == RC7_HOVER && !test->forward_used &&
@@ -124,7 +131,7 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
         return (PatrolAction){.type = PATROL_SET_MODE, .mode = LAND};
     }
 
-    const bool height_in_band = fabsf(in->height - FLOOR_HEIGHT_M) < HOVER_HEIGHT_TOLERANCE_M;
+    const bool height_in_band = fabsf(in->height - HOVER_HEIGHT_M) < HOVER_HEIGHT_TOLERANCE_M;
     const bool stationary = !in->on_ground && height_in_band &&
         fabsf(in->vz) < 0.15f && hypotf(in->vx, in->vy) < 0.15f;
     if (!stationary) test->settling = false;
@@ -135,16 +142,27 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
     }
     const bool settled = test->settling && now - test->settled_ms >= 1000U;
     if (test->state == RC7_TAKEOFF) {
-        const float initial_height = test->floor_reference - test->origin_z;
-        if (in->on_ground || test->origin_z - in->z < 0.10f ||
-            in->height - initial_height < 0.10f) return none;
+        /* Guided position targets supersede the active takeoff command. */
+        if (!settled || test->origin_z - in->z < LIFTOFF_MIN_RISE_M) return none;
+        test->target_z = in->z + (in->height - HOVER_HEIGHT_M);
         hold_here(test, in);
         test->started_ms = now;
-    } else if (test->state == RC7_FORWARD) {
-        if (edge == SWITCH_HIGH || !height_in_band)
+    } else if (test->state == RC7_FORWARD || test->state == RC7_RETURN) {
+        if (edge == SWITCH_HIGH || !height_in_band) {
             hold_here(test, in);
-        else if (settled && hypotf(in->x - test->target_x, in->y - test->target_y) < 0.15f)
-            test->state = RC7_HOVER;
+        } else if (settled &&
+                   hypotf(in->x - test->target_x, in->y - test->target_y) < POSITION_TOLERANCE_M &&
+                   test->command_x == test->target_x && test->command_y == test->target_y) {
+            if (test->state == RC7_FORWARD) {
+                test->state = RC7_RETURN;
+                test->started_ms = now;
+                test->settling = false;
+                test->target_x = test->origin_x;
+                test->target_y = test->origin_y;
+            } else {
+                test->state = RC7_HOVER;
+            }
+        }
     } else {
         if (settled && !test->forward_used &&
             test->stable_switch == SWITCH_MID && test->pending_switch == SWITCH_MID) {
@@ -162,12 +180,16 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
     const float dx = test->target_x - test->command_x;
     const float dy = test->target_y - test->command_y;
     const float distance = hypotf(dx, dy);
-    const float fraction = distance > 0.05f ? 0.05f / distance : 1.0f;
-    if (hypotf(test->command_x - in->x, test->command_y - in->y) < 0.15f) {
-        test->command_x += dx * fraction;
-        test->command_y += dy * fraction;
+    if (hypotf(test->command_x - in->x, test->command_y - in->y) < POSITION_TOLERANCE_M) {
+        if (distance > POSITION_STEP_M) {
+            const float fraction = POSITION_STEP_M / distance;
+            test->command_x += dx * fraction;
+            test->command_y += dy * fraction;
+        } else {
+            test->command_x = test->target_x;
+            test->command_y = test->target_y;
+        }
     }
-    const float height_correction = fmaxf(-0.10f, fminf(0.10f, in->height - FLOOR_HEIGHT_M));
     return (PatrolAction){.type = PATROL_TARGET, .x = test->command_x,
-        .y = test->command_y, .z = in->z + height_correction, .yaw = test->yaw};
+        .y = test->command_y, .z = test->target_z, .yaw = test->yaw};
 }

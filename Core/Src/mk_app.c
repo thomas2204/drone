@@ -68,7 +68,7 @@ static bool patrol_range_valid, patrol_ekf_valid;
 static uint32_t patrol_range_boot_ms;
 static uint8_t patrol_range_id;
 static bool patrol_range_seen;
-static float patrol_slant_m;
+static uint16_t patrol_slant_cm;
 static uint8_t patrol_system_status;
 #if RC7_GUIDED_TEST
 static Rc7Guided rc7_guided;
@@ -246,7 +246,7 @@ static void ProcessMessage(
                 range.current_distance < range.max_distance &&
                 range.current_distance > 0U && range.max_distance >= 400U &&
                 range.signal_quality != 1U;
-            patrol_slant_m=range.current_distance*0.01f;
+            patrol_slant_cm=range.current_distance;
             break;
         }
         case MAVLINK_MSG_ID_EXTENDED_SYS_STATE: {
@@ -384,9 +384,9 @@ static void CopyFlowReference(CameraFlowReference *reference, uint32_t now)
         reference->gz_mrad_s = ScaleImu(fc_data.yaw_rate);
     }
     if (patrol_range_valid && patrol_range_seen && tof_age < UINT16_MAX &&
-        patrol_slant_m > 0.0f && patrol_slant_m < 65.535f) {
+        patrol_slant_cm > 0U && patrol_slant_cm <= UINT16_MAX / 10U) {
         reference->tof_age_ms = (uint16_t)tof_age;
-        reference->tof_mm = (uint16_t)(patrol_slant_m * 1000.0f + 0.5f);
+        reference->tof_mm = (uint16_t)(patrol_slant_cm * 10U);
     }
 #if CAMERA_FLOW_MAVLINK
     reference->flow_tx_count = flow_link.tx_count;
@@ -591,7 +591,7 @@ static void PatrolTransmit(uint32_t now)
     input.nav_ok=patrol_ekf_valid && patrol_ekf_ms != 0U && now-patrol_ekf_ms < 1500U;
     input.tof_ok=patrol_range_valid && patrol_range_ms != 0U && now-patrol_range_ms < 500U &&
         fabsf(fc_data.roll) < 0.5f && fabsf(fc_data.pitch) < 0.5f;
-    input.height=patrol_slant_m*cosf(fc_data.roll)*cosf(fc_data.pitch);
+    input.height=patrol_slant_cm*0.01f*cosf(fc_data.roll)*cosf(fc_data.pitch);
     PatrolAction action = {0};
 #if RC7_GUIDED_TEST
     if (patrol.state == PATROL_IDLE) {
@@ -605,7 +605,7 @@ static void PatrolTransmit(uint32_t now)
         const bool option_ready = rc7_option_clear &&
             (rc7_guided.state != RC7_IDLE || now - rc7_option_ms < 8000U);
         const uint16_t pwm = option_ready && now - rc7_rx_ms < 500U ? rc7_pwm : 0U;
-        action = Rc7Guided_Update(&rc7_guided, &rc7_input, link_fresh, pwm, now);
+        action = Rc7Guided_Update(&rc7_guided, &rc7_input, patrol_slant_cm, link_fresh, pwm, now);
     } else {
         rc7_guided = (Rc7Guided){0};
     }
@@ -786,6 +786,12 @@ bool MAVLink_GetTelemetry(
         return false;
 
     memcpy(out, &fc_data, sizeof(*out));
+#if RC7_GUIDED_TEST
+    if (rc7_guided.state == RC7_FORWARD)
+        out->guided_motion = FC_GUIDED_MOTION_FORWARD;
+    else if (rc7_guided.state == RC7_RETURN)
+        out->guided_motion = FC_GUIDED_MOTION_RETURN;
+#endif
 
     xSemaphoreGive(fc_mutex);
 

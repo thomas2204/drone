@@ -458,11 +458,23 @@ void led_blink1(void *argument)
             const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
             const FC_ArmStatus status = received ? FC_GetArmStatus(&fc, now) : FC_ARM_DISCONNECTED;
             const bool show_green = status == FC_ARM_READY || status == FC_ARM_ALREADY_ARMED;
-            const uint8_t red = show_green ? 0U : 255U;
-            const uint8_t green = show_green ? 255U : 0U;
+            uint8_t red = show_green ? 0U : 255U;
+            uint8_t green = show_green ? 255U : 0U;
+            uint8_t blue = 0U;
+            if (status == FC_ARM_ALREADY_ARMED) {
+                if (fc.guided_motion == FC_GUIDED_MOTION_FORWARD) {
+                    red = 0U;
+                    green = 0U;
+                    blue = 255U;
+                } else if (fc.guided_motion == FC_GUIDED_MOTION_RETURN) {
+                    red = 255U;
+                    green = 45U;
+                    blue = 145U;
+                }
+            }
 
             for (uint16_t i = 0; i < STATUS_LED_COUNT; i += STATUS_LED_STEP)
-                LED_Strip_Set(i, red, green, 0U, 100U);
+                LED_Strip_Set(i, red, green, blue, 100U);
             LED_Strip_Show();
         }
         osDelay(500);

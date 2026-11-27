@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+typedef enum {
+    FC_GUIDED_MOTION_NONE,
+    FC_GUIDED_MOTION_FORWARD,
+    FC_GUIDED_MOTION_RETURN
+} FC_GuidedMotion;
+
 typedef struct
 {
     bool connected;
@@ -32,6 +38,7 @@ typedef struct
 
     uint32_t last_heartbeat_ms;
     uint32_t last_attitude_ms;
+    FC_GuidedMotion guided_motion;
 
 } FC_Telemetry_t;
 

@@ -184,8 +184,17 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 # Include MAVLink C library
+set(MAVLINK_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/c_library_v2")
+if(NOT EXISTS "${MAVLINK_INCLUDE_DIR}/common/mavlink.h" OR
+   NOT EXISTS "${MAVLINK_INCLUDE_DIR}/ardupilotmega/mavlink.h")
+    set(MAVLINK_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/MAVLink")
+endif()
+if(NOT EXISTS "${MAVLINK_INCLUDE_DIR}/common/mavlink.h" OR
+   NOT EXISTS "${MAVLINK_INCLUDE_DIR}/ardupilotmega/mavlink.h")
+    message(FATAL_ERROR "MAVLink headers are missing. Clone https://github.com/mavlink/c_library_v2.git into c_library_v2 or MAVLink in the project root.")
+endif()
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/c_library_v2
+    "${MAVLINK_INCLUDE_DIR}"
     ${CMAKE_SOURCE_DIR}/ws2812b/ws2812-dma
 )
 # Add STM32CubeMX generated sources

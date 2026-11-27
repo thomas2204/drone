@@ -17,7 +17,8 @@
                 "CMAKE_BUILD_TYPE": "Debug",
                 "GPS_DIAGNOSTICS": "OFF",
                 "GPS_BDS_TEST_PROFILE": "0",
-                "GPS_MEASUREMENT_PERIOD_MS": "200"
+                "GPS_MEASUREMENT_PERIOD_MS": "200",
+                "RC7_GUIDED_TEST": "ON"
             }
         },
         {
@@ -25,7 +26,8 @@
             "inherits": "Debug",
             "cacheVariables": {
                 "CAMERA_FLOW_BENCH": "ON",
-                "CAMERA_FAST_MJPEG": "ON"
+                "CAMERA_FAST_MJPEG": "ON",
+                "RC7_GUIDED_TEST": "OFF"
             }
         },
         {
@@ -37,10 +39,7 @@
         },
         {
             "name": "DebugRc7Guided",
-            "inherits": "Debug",
-            "cacheVariables": {
-                "RC7_GUIDED_TEST": "ON"
-            }
+            "inherits": "Debug"
         },
         {
             "name": "Release",
