@@ -28,11 +28,17 @@
 #define MIN_SPAN_C   5.0f                      /* never stretch less than this */
 #define RANGE_SMOOTH 0.2f                      /* 0 = frozen, 1 = no smoothing */
 
-/* Static, 32-byte aligned buffers: they must live in AXI SRAM for DMA. */
-static uint8_t row[AVI_W * 3];
+/* Batch eight rendered rows rather than submitting each 960-byte row to
+ * FatFs. Pixel staging is CPU-only; the SD bounce buffer stays in AXI SRAM. */
+#define ROWS_PER_WRITE 8U
+static uint8_t render_rows[ROWS_PER_WRITE * AVI_W * 3]
+#if CAMERA_USE_SDRAM
+    __attribute__((section(".camera_sdram"), aligned(32)))
+#endif
+    ;
 static uint8_t hdr[HDR_SIZE];
 static uint8_t idxbuf[512];
-static uint8_t io[1024] __attribute__((section(".sd_dma_buffer"), aligned(32)));
+static uint8_t io[8192] __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static FIL vf __attribute__((section(".sd_dma_buffer"), aligned(32)));
 
 /* Bounce from DTCM/stack to AXI SRAM. Split at the partial-sector boundary
@@ -174,12 +180,13 @@ static int render(const float *To)
     }
     float k = 255.0f / (hi - lo);
 
+    unsigned rows_used = 0;
     for (int y = AVI_H - 1; y >= 0; y--) {
         const float *r0 = To + yi[y] * SRC_W;
         const float *r1 = r0 + SRC_W;
         float fy = yf[y];
         /* AVI rows are stored bottom-up */
-        uint8_t *d = row;
+        uint8_t *d = render_rows + rows_used * AVI_W * 3U;
         for (int x = 0; x < AVI_W; x++) {
             int i = xi[x];
             float fx = xf[x];
@@ -194,7 +201,11 @@ static int render(const float *To)
             d[2] = lut[idx][2];
             d += 3;
         }
-        if (write_all(row, sizeof(row))) return -1;
+        ++rows_used;
+        if (rows_used == ROWS_PER_WRITE || y == 0) {
+            if (write_all(render_rows, rows_used * AVI_W * 3U)) return -1;
+            rows_used = 0;
+        }
     }
     return 0;
 }

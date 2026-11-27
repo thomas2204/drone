@@ -12,11 +12,15 @@ typedef struct {
     uint32_t rx_bytes, rx_errors, rx_overflows, commands, busy_commands;
     uint32_t devices;
     uint32_t automatic, stop_requested;
+    uint32_t stop_elapsed_ms;
 } RecordReport;
 extern volatile RecordReport record_report;
 bool RecordControl_Init(void);
-/* Read fresh FC arm telemetry; starts camera-only segments, never arms the FC. */
+/* Read fresh FC arm telemetry; starts synchronized normal/thermal segments. */
 void RecordControl_PollArm(void);
+/* Freeze a common stop time for both camera files and the video CSV. */
+void RecordControl_RequestStop(void);
+uint32_t RecordControl_RecordedDuration(void);
 bool RecordControl_TakeRequest(uint32_t device);
 bool RecordControl_WaitStart(uint32_t device);
 bool RecordControl_HasTime(void);

@@ -226,6 +226,13 @@ int main(void) {
     assert(load_saved_zero(&saved_offset) && saved_offset == 1024);
     publish(); now+=600; assert(!UWB_RangeZeroBearing());
     range_once(); assert(!current.pdoa_filtered_valid && !current.angle_valid);
+    /* Exact existing E:/UWBZERO.BIN record: preserve phase units, not degrees. */
+    const uint8_t reference_zero[]={0x55,0x57,0x42,0x31,0xd4,0x08,0x2b,0xf7};
+    memcpy(card_bytes,reference_zero,sizeof reference_zero);card_size=sizeof reference_zero;
+    assert(load_saved_zero(&saved_offset) && saved_offset==2260);
+    int32_t zero_bearing;
+    assert(UWB_PhaseToBearing(2260,UWB_ANTENNA_SPACING_M,(float)saved_offset/2048.0f,5,&zero_bearing));
+    assert(zero_bearing==0);
     puts("PDoA quality, stale/error handling, signed TDoA and bearing geometry passed");
     return 0;
 }

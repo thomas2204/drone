@@ -926,9 +926,12 @@ static bool RecordVideo(void)
 #if CAMERA_FLOW_BENCH
         if (measure_flow) CameraFlow_Offer(jpeg, bytes, frame_start, frame_ready, HAL_GetTick(), &reference);
 #endif
-        uint32_t elapsed = HAL_GetTick() - frame_start;
-        if (elapsed < camera_snapshot.frame_period_ms) {
-            uint32_t delay=camera_snapshot.frame_period_ms-elapsed;
+        /* Keep an absolute frame schedule so an occasional shared-SD stall
+         * can be recovered instead of shifting every later frame deadline. */
+        uint32_t elapsed = HAL_GetTick() - start;
+        uint32_t due = (i + 1U) * camera_snapshot.frame_period_ms;
+        if (elapsed < due) {
+            uint32_t delay=due-elapsed;
             DelayMs(delay); camera_snapshot.pace_ms += delay;
         }
     }
@@ -937,8 +940,7 @@ static bool RecordVideo(void)
     if (measure_flow) CameraFlow_ReportCapture();
 #endif
 #if !BOARD_CAMERA_TEST
-    if (commanded_recording) camera_snapshot.video_duration_ms = record_report.stop_requested
-        ? HAL_GetTick() - record_report.start_ms : record_report.duration_ms;
+    if (commanded_recording) camera_snapshot.video_duration_ms = RecordControl_RecordedDuration();
 #endif
     bool finalized = camera_snapshot.video_mp4
         ? CameraMP4_End(mp4, camera_snapshot.video_duration_ms)

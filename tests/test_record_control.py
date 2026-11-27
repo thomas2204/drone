@@ -169,29 +169,40 @@ int main(void) {
     fake_fc.connected=true;fake_fc.heartbeat_count=1;fake_fc.last_heartbeat_ms=now;
     RecordControl_PollArm();assert(!record_report.active);
     fake_fc.armed=true;RecordControl_PollArm();
-    assert(record_report.automatic && record_report.active && record_report.devices==RECORD_CAMERA);
+    assert(!record_report.active && record_report.session==previous_session); /* Wait for thermal warmup. */
+    thermal_report.ready=1;RecordControl_PollArm();
+    assert(record_report.automatic && record_report.active && record_report.devices==BOTH);
     assert(record_report.session==previous_session+1 && record_report.duration_ms==30000);
     RecordControl_PollArm();assert(record_report.session==previous_session+1);
     assert(RecordControl_TakeRequest(RECORD_CAMERA));
-    assert(RecordControl_WaitStart(RECORD_CAMERA));
+    assert(RecordControl_TakeRequest(RECORD_THERMAL));
+    partner=1;assert(RecordControl_WaitStart(RECORD_CAMERA));
+    assert(record_report.ready==BOTH);
     RecordControl_Done(RECORD_CAMERA,true);
+    assert(record_report.active);RecordControl_Done(RECORD_THERMAL,true);
     RecordControl_PollArm();assert(record_report.session==previous_session+2);
     RecordControl_Done(RECORD_CAMERA,false);
+    RecordControl_Done(RECORD_THERMAL,true);
     RecordControl_PollArm();assert(!record_report.active); /* Failure waits for re-arm. */
     fake_fc.armed=false;RecordControl_PollArm();
     fake_fc.armed=true;fake_fc.last_heartbeat_ms=now;RecordControl_PollArm();
     assert(record_report.active && record_report.session==previous_session+3);
-    assert(RecordControl_TakeRequest(RECORD_CAMERA));assert(RecordControl_WaitStart(RECORD_CAMERA));
+    assert(RecordControl_TakeRequest(RECORD_CAMERA));assert(RecordControl_TakeRequest(RECORD_THERMAL));
+    partner=1;assert(RecordControl_WaitStart(RECORD_CAMERA));
     now+=4000;fake_fc.armed=false;RecordControl_PollArm();
     assert(!record_report.stop_requested); /* Stale disarm is not an observed disarm. */
     fake_fc.last_heartbeat_ms=now;RecordControl_PollArm();
     assert(record_report.stop_requested && !RecordControl_HasTime());
-    RecordControl_Done(RECORD_CAMERA,true);RecordControl_PollArm();assert(!record_report.active);
+    assert(RecordControl_RecordedDuration()==4000);
+    now+=2000;RecordControl_RequestStop();assert(RecordControl_RecordedDuration()==4000);
+    RecordControl_Done(RECORD_CAMERA,true);RecordControl_Done(RECORD_THERMAL,true);
+    RecordControl_PollArm();assert(!record_report.active);
     fake_fc.armed=true;fake_fc.last_heartbeat_ms=now-3000;RecordControl_PollArm();
     assert(!record_report.active); /* Stale arm cannot start a clip. */
     fake_fc.last_heartbeat_ms=now;RecordControl_PollArm();assert(record_report.active);
     fake_fc.armed=false;RecordControl_PollArm();
     assert(!RecordControl_WaitStart(RECORD_CAMERA)); /* Disarmed during preparation. */
+    assert(RecordControl_RecordedDuration()==0);
     puts("UART parsing, warmup, synchronization, deadline, busy/repeat, failure and tick wrap passed");
     return 0;
 }

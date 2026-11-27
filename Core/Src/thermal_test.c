@@ -1,7 +1,7 @@
 /* thermal_test.c
  * MLX90640 (shared I2C1 PB8/PB9) -> Bluetooth -> SDMMC1 + FatFs
  *
- * Bluetooth "record": one numbered Txxxx.AVI, 10-second shared capture
+ * Arm or Bluetooth "record": one numbered Txxxx.AVI, shared 30-second capture
  * window with OV2640. Bilinear 320x240, iron-bow palette. Player support varies.
  */
 #include "thermal_test.h"
@@ -208,10 +208,11 @@ static bool record_clip(void)
             if (rc) { thermal_report.storage_error=rc; success=false; break; }
         }
     }
-    rc=avi_close_duration(record_report.started ? record_report.duration_ms : 0);
+    uint32_t duration = record_report.started ? RecordControl_RecordedDuration() : 0;
+    rc=avi_close_duration(duration);
     if (rc) { thermal_report.storage_error=rc; success=false; }
     thermal_report.clip_frames=avi_frames();
-    thermal_report.duration_ms=record_report.started ? record_report.duration_ms : 0;
+    thermal_report.duration_ms=duration;
     if (!thermal_report.clip_frames) success=false;
     if (success) thermal_report.clips++;
     memcpy((void *)thermal_report.filename,name,sizeof(name));
@@ -227,7 +228,7 @@ void thermal_test_run(void)
     for (int i=0;i<4;i++) read_frame();
     thermal_report.ready=1;
     write_snapshot();
-    printf("THERMAL: ready; send record for a 10-second clip\r\n");
+    printf("THERMAL: ready; records with normal camera on arm or record command\r\n");
     for (;;) {
         if (RecordControl_TakeRequest(RECORD_THERMAL)) {
             bool success=record_clip();

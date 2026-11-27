@@ -19,7 +19,7 @@ volatile RecordReport record_report;
 static volatile uint8_t record_rx[RX_SIZE];
 static volatile uint32_t record_rx_head, record_rx_tail;
 static uint8_t received_byte;
-static bool auto_armed, auto_failed;
+static bool auto_armed, auto_failed, auto_waiting_thermal;
 
 static void Log(const char *s) { AppLog_Write(s,(uint16_t)strlen(s),200); }
 
@@ -75,6 +75,25 @@ void RecordControl_Done(uint32_t device, bool success)
     taskEXIT_CRITICAL();
 }
 
+void RecordControl_RequestStop(void)
+{
+    taskENTER_CRITICAL();
+    if (!record_report.stop_requested) {
+        int32_t elapsed = record_report.started
+            ? (int32_t)(HAL_GetTick() - record_report.start_ms) : 0;
+        record_report.stop_elapsed_ms = elapsed < 0 ? 0U : (uint32_t)elapsed;
+        if (record_report.stop_elapsed_ms > record_report.duration_ms)
+            record_report.stop_elapsed_ms = record_report.duration_ms;
+        record_report.stop_requested = 1;
+    }
+    taskEXIT_CRITICAL();
+}
+
+uint32_t RecordControl_RecordedDuration(void)
+{
+    return record_report.stop_requested ? record_report.stop_elapsed_ms : record_report.duration_ms;
+}
+
 static void StartSession(uint32_t devices, bool automatic)
 {
     taskENTER_CRITICAL();
@@ -86,6 +105,7 @@ static void StartSession(uint32_t devices, bool automatic)
     record_report.duration_ms = 30000U;
     record_report.automatic = automatic;
     record_report.stop_requested = 0;
+    record_report.stop_elapsed_ms = 0;
     record_report.active = 1;
     taskEXIT_CRITICAL();
 }
@@ -98,17 +118,23 @@ void RecordControl_PollArm(void)
     if (!MAVLink_GetTelemetry(&fc) || !fc.connected || !fc.heartbeat_count ||
         (uint32_t)(now - fc.last_heartbeat_ms) >= 3000U) return;
     if (!fc.armed) {
-        auto_armed = auto_failed = false;
+        auto_armed = auto_failed = auto_waiting_thermal = false;
         if (record_report.active && record_report.automatic)
-            record_report.stop_requested = 1;
+            RecordControl_RequestStop();
         return;
     }
     if (auto_armed && !record_report.active && record_report.automatic && record_report.failed)
         auto_failed = true;
     auto_armed = true;
     if (auto_armed && !auto_failed && !record_report.active) {
-        StartSession(RECORD_CAMERA, true);
-        Log("REC: armed; preparing camera and synchronized CSV\r\n");
+        if (!thermal_report.ready) {
+            if (!auto_waiting_thermal) Log("REC: armed; waiting for thermal camera\r\n");
+            auto_waiting_thermal = true;
+            return;
+        }
+        auto_waiting_thermal = false;
+        StartSession(BOTH, true);
+        Log("REC: armed; preparing both cameras and synchronized CSV\r\n");
     }
 #endif
 }

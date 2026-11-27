@@ -2,14 +2,47 @@
 
 ## Arm-triggered video and synchronized telemetry CSV (2026-11-27)
 
-Normal Debug now starts camera-only recording from a fresh FC armed heartbeat.
-While armed it records successive bounded 30-second clips; fresh disarm stops
-the current clip and finalizes its files. Finalization/readback and next-clip
+Normal Debug now starts both normal and MLX90640 thermal recording from a
+fresh FC armed heartbeat, once the thermal camera has finished warming up.
+Both workers share one start time. While armed it records successive bounded
+30-second clips; fresh disarm freezes one elapsed stop time for both videos
+and the normal video's CSV, then finalizes the files. Finalization/readback and next-clip
 sensor initialization introduce a gap between segments. Stale/disconnected
 telemetry cannot start a session or masquerade as a disarm. An automatic
 recording failure waits for a new disarm/re-arm cycle rather than continuously
 retrying SD failures. Existing manual `record` and `record cam` commands remain
 available. This code reads FC telemetry and sends no arming/flight command.
+
+The existing calibration on the user's E: card was inspected and backed up as
+`build/uwb-zero-from-e.bin`: `55574231d4082bf7`, one intact UWB1 record with
+offset 2260 (phase radians multiplied by 2048). The firmware reads that same
+card's `0:/UWBZERO.BIN` on startup and applies the phase offset before converting
+to bearing. This value is a saved phase reference, not a 63-degree bearing.
+The calibration file is preserved; another zero command is unnecessary unless
+the antenna mounting or intended forward direction changes. A regression
+test decodes this exact record and checks that phase 2260 gives zero bearing.
+
+The board confirmed `angle_calibrated=1, zero_phase_raw=2260` after booting with
+that card. Automatic sessions now select BOTH workers and wait for thermal
+readiness before starting. The thermal writer batches eight bottom-up rows
+through an aligned 8 KiB SD buffer; its host-rendered AVI is byte-identical to
+the earlier writer. Normal camera pacing uses absolute frame deadlines so
+short shared-SD stalls do not shift all subsequent deadlines.
+
+Connected-board combined test: VIDEO011.AVI / VIDEO011.CSV and T0003.AVI
+shared a 10000 ms window. Normal video saved 100 frames (10.0 FPS), thermal
+saved 38 frames (3.8 FPS), and the CSV saved/verified 100 rows. Both workers
+completed successfully (`ready=3, done=3, failed=0`). All CSV rows contain the
+saved zero 2260. A separate debugger-driven stop after normal frame 20
+finalized both videos at the same 2207 ms, with 20 normal frames, eight
+thermal frames and 20 verified CSV rows. The debugger requested a common
+stop without changing FC arm telemetry. Actual arm/disarm triggering and
+thermal-warmup gating are covered by host telemetry tests.
+
+Evidence: `build/both-arm-start-result.txt`, `build/both-arm-scheduled-result.txt`,
+`build/both-arm-final-telemetry.csv`, `build/both-arm-short-result.txt`,
+`build/both-arm-record-tests.txt`, `build/both-arm-zero-tests.txt` and
+`build/both-arm-thermal-tests.txt`. The saved calibration was not rewritten.
 
 Each real video receives a matching sidecar, e.g. VIDEO000.AVI / VIDEO000.CSV
 (or VIDEO000.MP4 / VIDEO000.CSV). Existing CSV names are reserved when choosing

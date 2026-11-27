@@ -59,7 +59,7 @@ int AppStorage_Close(FIL *f) { int r=fclose(f->fp); opened--;return r; }
 int f_write(FIL *f,const void *p,UINT n,UINT *out) {
     *out=0; writes++;
     unsigned partial=f->pos&511;
-    if (((uintptr_t)p&31) || (partial && n>512-partial) || n>1024) {
+    if (((uintptr_t)p&31) || (partial && n>512-partial) || n>8192) {
         bad_alignment++;return 1;
     }
     if(writes==fail_at) {fail_at=0;return 1;}
@@ -79,6 +79,7 @@ int main(void) {
     for(int y=0;y<24;y++) for(int x=0;x<32;x++) frame[y*32+x]=20.0f+y;
     if(avi_open("thermal.avi") || avi_add_frame(frame) || avi_add_frame(frame) || avi_close_duration(10000)) return 1;
     if(avi_open("thermal.avi")==0) return 2;
+    if(avi_open("short.avi") || avi_add_frame(frame) || avi_add_frame(frame) || avi_close_duration(2062)) return 5;
     if(avi_open("failure.avi") || avi_add_frame(frame)) return 3;
     inject(5);
     if(avi_add_frame(frame)==0 || avi_close()) return 4;
@@ -118,6 +119,14 @@ int main(void) {
         self.assertEqual(u32(idx+4), 32)
         self.assertEqual(u32(idx+16), 4)
         self.assertEqual(u32(idx+32), 4+230408)
+
+    def test_early_stop_duration(self):
+        data = (self.work / "short.avi").read_bytes()
+        u32 = lambda at: struct.unpack_from('<I', data, at)[0]
+        self.assertEqual(u32(48), 2)
+        self.assertEqual(u32(32), 1031000)
+        self.assertAlmostEqual(u32(140)*u32(128)/u32(132), 2.062, places=2)
+        self.assertEqual(u32(4)+8, len(data))
 
     def test_failed_frame_is_truncated_before_index(self):
         name = self.work / "failure.avi"

@@ -3,14 +3,17 @@
 The pulled MLX90640 implementation is now built into the normal application.
 Its sensor calibration and temperature calculations, refresh setting 0x04,
 emissivity 0.95, Ta shift 8 C, iron-bow palette and bilinear 320x240 output
-are retained. Automatic startup/periodic recording has been replaced by
-Bluetooth `record`: both cameras prepare, share a 10-second capture window,
-then finalize their files and return to idle. Existing files are not
+are retained. Fresh FC arm telemetry now starts both cameras after thermal
+warmup. They share a start time and record 30-second segments while armed;
+disarm freezes a common elapsed stop time so both files end on the same
+timeline. Bluetooth `record` still records both cameras manually, and
+`record cam` selects only the normal camera. Existing files are not
 overwritten; thermal clips use T0001.AVI, T0002.AVI, etc. See
 [camera recording](camera-video.md) for commands and current validation.
 The AVI format is retained from the imported code; Windows Media Player
-compatibility of thermal AVI has not been established. OV2640 uses the
-previously playback-confirmed H.264 MP4 format.
+compatibility of thermal AVI has not been established. Normal Debug defaults
+to 800x600 MJPEG AVI, with its matching UWB/GPS CSV; software H.264 MP4 remains
+an optional 320x240 mode.
 
 ## Clock and peripheral configuration
 
@@ -47,15 +50,19 @@ FatFs reentrancy remains enabled; file lock capacity is increased from 2 to
 thermal/audio file. Thermal writes pass through an aligned AXI bounce
 buffer and split at partial sector boundaries for SDMMC IDMA.
 
-Thermal AVI renders bottom-up rows and streams them directly to the file,
-preserving image content without allocating another 230400-byte framebuffer.
+Thermal AVI renders bottom-up in eight-row blocks (7680 bytes) and writes
+through a separate aligned 8 KiB AXI SRAM bounce buffer, preserving the
+original 320x240 BGR pixels without a full 230400-byte framebuffer. In SDRAM
+builds, the CPU-only render block is in the tested lower 2 MiB; internal-SRAM
+builds keep it in DTCM. Host rendering produces a byte-identical AVI to the
+previous row-at-a-time writer while using fewer small SD transactions.
 Failed partial frames are truncated before the AVI index is finalized.
 The pulled 98304-byte RTOS heap is preserved and placed in D2 SRAM. The
 16 KiB MP4 encoder task stack/control block are statically allocated in
 fast DTCM. Thermal remains at the pulled Low task priority, matching the
 IOC; audio remains Normal to protect refills. Video encoding and thermal
-math/rendering compile with optimization even in Debug. External SDRAM is
-not required by either recorder.
+math/rendering compile with optimization even in Debug. Normal Debug uses
+SDRAM buffers; the internal-SRAM Release path remains supported.
 
 Thermal logs share the Bluetooth transmit mutex with existing application
 and camera messages. They do not call an undefined weak __io_putchar.
