@@ -11,3 +11,39 @@ mx.scratch
 *.tlog
 *.rlog
 __pycache__/
+
+# Local notes and generated samples/reports (kept on disk).
+/docs/
+/outputs/
+*.md
+!AGENTS.md
+!SKILL.md
+!LICENSE*.md
+!COPYING*.md
+!NOTICE*.md
+# Preserve vendored documentation/provenance with the dependencies.
+!Drivers/**/*.md
+!Middlewares/**/*.md
+!UWB-beacon-CMake-version/Core/Inc/dwt_uwb_driver/utest/googletest/**/*.md
+
+# Recorded data and exported office documents.
+*.csv
+*.tsv
+*.log
+*.xlsx
+*.xls
+*.docx
+*.pptx
+*.avi
+*.mp4
+*.h264
+
+# Compiler and debugger output; source, configuration and SD assets stay visible.
+*.elf
+*.hex
+*.map
+*.o
+*.obj
+*.su
+*.bak
+*.tmp
