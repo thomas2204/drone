@@ -1,4 +1,5 @@
 #include "camera_snapshot.h"
+#include "video_log.h"
 #if CAMERA_USE_SDRAM
 #include "camera_sdram.h"
 #define CAMERA_FRAME_SECTION ".camera_sdram"
@@ -810,6 +811,7 @@ static void SaveFlowTrace(const char *video_name)
 
 static bool RecordVideo(void)
 {
+    VideoLog_Begin();
     /* First validated camera frame already exists. Capture and write one
      * bounded frame at a time; create the movie only after capture succeeds. */
     /* Only one container is active. Bound stack use as the index grows. */
@@ -830,6 +832,13 @@ static bool RecordVideo(void)
             ? (camera_snapshot.probe_registers == 6U ? "0:/TEST%03u.MP4" : "0:/VIDEO%03u.MP4")
             : (camera_snapshot.probe_registers == 6U ? "0:/TEST%03u.AVI" : "0:/VIDEO%03u.AVI");
         snprintf(filename, sizeof(filename), format, i);
+        if (camera_snapshot.probe_registers != 6U) {
+            char csv[20];
+            if (!VideoLog_Name(csv, filename)) { Fail(CAMERA_DATA); goto done; }
+            FRESULT existing = AppStorage_Stat(csv);
+            if (existing == FR_OK) continue;
+            if (existing != FR_NO_FILE) { camera_snapshot.fatfs_result = existing; Fail(CAMERA_FS); goto done; }
+        }
 #if CAMERA_FLOW_BENCH
         if (measure_flow) {
             /* An AVI can be deleted independently of its matching flow trace. */
@@ -883,6 +892,7 @@ static bool RecordVideo(void)
 #endif
 #endif
         camera_snapshot.capture_ms += HAL_GetTick()-frame_start;
+        if (camera_snapshot.probe_registers != 6U) VideoLog_Sample(i);
 #if !BOARD_CAMERA_TEST
         if (commanded_recording && !RecordControl_HasTime()) break;
 #endif
@@ -927,7 +937,8 @@ static bool RecordVideo(void)
     if (measure_flow) CameraFlow_ReportCapture();
 #endif
 #if !BOARD_CAMERA_TEST
-    if (commanded_recording) camera_snapshot.video_duration_ms = record_report.duration_ms;
+    if (commanded_recording) camera_snapshot.video_duration_ms = record_report.stop_requested
+        ? HAL_GetTick() - record_report.start_ms : record_report.duration_ms;
 #endif
     bool finalized = camera_snapshot.video_mp4
         ? CameraMP4_End(mp4, camera_snapshot.video_duration_ms)
@@ -974,6 +985,21 @@ static bool RecordVideo(void)
             offset += count;
         }
         camera_snapshot.captured_bytes = file_bytes;
+    }
+    if (camera_snapshot.probe_registers != 6U) {
+        camera_snapshot.close_result = AppStorage_Close(&camera_file);
+        opened = false;
+        if (camera_snapshot.close_result != FR_OK) { Fail(CAMERA_FS); goto done; }
+        camera_snapshot.stage = CAMERA_WRITE;
+        camera_snapshot.fatfs_result = VideoLog_Write(&camera_file, filename, frames,
+            camera_snapshot.video_duration_ms,
+#if !BOARD_CAMERA_TEST
+            commanded_recording ? record_report.start_ms : start,
+#else
+            start,
+#endif
+            io_buffer, IO_BYTES);
+        if (camera_snapshot.fatfs_result != FR_OK) { Fail(CAMERA_FS); goto done; }
     }
     ok = complete;
 done:

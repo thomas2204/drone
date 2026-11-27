@@ -19,6 +19,7 @@ volatile RecordReport record_report;
 static volatile uint8_t record_rx[RX_SIZE];
 static volatile uint32_t record_rx_head, record_rx_tail;
 static uint8_t received_byte;
+static bool auto_armed, auto_failed;
 
 static void Log(const char *s) { AppLog_Write(s,(uint16_t)strlen(s),200); }
 
@@ -34,7 +35,7 @@ bool RecordControl_TakeRequest(uint32_t device)
 bool RecordControl_WaitStart(uint32_t device)
 {
     taskENTER_CRITICAL();
-    if (!record_report.active || !(record_report.devices & device)) {
+    if (!record_report.active || record_report.stop_requested || !(record_report.devices & device)) {
         taskEXIT_CRITICAL();
         return false;
     }
@@ -45,11 +46,11 @@ bool RecordControl_WaitStart(uint32_t device)
     }
     taskEXIT_CRITICAL();
     uint32_t waiting = HAL_GetTick();
-    while (!record_report.started && !record_report.failed) {
+    while (!record_report.started && !record_report.failed && !record_report.stop_requested) {
         if (HAL_GetTick()-waiting >= 10000U) return false;
         osDelay(1);
     }
-    if (record_report.failed) return false;
+    if (record_report.failed || record_report.stop_requested) return false;
     while ((int32_t)(HAL_GetTick()-record_report.start_ms) < 0) osDelay(1);
     return true;
 }
@@ -59,6 +60,7 @@ bool RecordControl_HasTime(void)
     /* Once synchronized, each worker owns its result. A failed peer must
      * not truncate a healthy recording or turn its verification into timeout. */
     return record_report.active && record_report.started &&
+        !record_report.stop_requested &&
         HAL_GetTick()-record_report.start_ms < record_report.duration_ms;
 }
 
@@ -71,6 +73,44 @@ void RecordControl_Done(uint32_t device, bool success)
         if (record_report.done == record_report.devices) record_report.active = 0;
     }
     taskEXIT_CRITICAL();
+}
+
+static void StartSession(uint32_t devices, bool automatic)
+{
+    taskENTER_CRITICAL();
+    record_report.session++;
+    record_report.devices = devices;
+    record_report.pending = devices;
+    record_report.ready = record_report.done = record_report.failed = 0;
+    record_report.start_ms = record_report.started = 0;
+    record_report.duration_ms = 30000U;
+    record_report.automatic = automatic;
+    record_report.stop_requested = 0;
+    record_report.active = 1;
+    taskEXIT_CRITICAL();
+}
+
+void RecordControl_PollArm(void)
+{
+#if APP_CAMERA_ENABLED
+    FC_Telemetry_t fc;
+    uint32_t now = HAL_GetTick();
+    if (!MAVLink_GetTelemetry(&fc) || !fc.connected || !fc.heartbeat_count ||
+        (uint32_t)(now - fc.last_heartbeat_ms) >= 3000U) return;
+    if (!fc.armed) {
+        auto_armed = auto_failed = false;
+        if (record_report.active && record_report.automatic)
+            record_report.stop_requested = 1;
+        return;
+    }
+    if (auto_armed && !record_report.active && record_report.automatic && record_report.failed)
+        auto_failed = true;
+    auto_armed = true;
+    if (auto_armed && !auto_failed && !record_report.active) {
+        StartSession(RECORD_CAMERA, true);
+        Log("REC: armed; preparing camera and synchronized CSV\r\n");
+    }
+#endif
 }
 
 static void Command(char *line)
@@ -122,15 +162,7 @@ static void Command(char *line)
     if ((devices & RECORD_THERMAL) && !thermal_report.ready) {
         Log("REC: thermal camera not ready; try again shortly\r\n"); return;
     }
-    taskENTER_CRITICAL();
-    record_report.session++;
-    record_report.devices = devices;
-    record_report.pending = devices;
-    record_report.ready=record_report.done=record_report.failed=0;
-    record_report.start_ms=record_report.started=0;
-    record_report.duration_ms=30000U;
-    record_report.active=1;
-    taskEXIT_CRITICAL();
+    StartSession(devices, false);
     Log(flow_log ? "FLOW LOG: preparing 10-second EKF trace\r\n"
         : camera_only ? "REC: preparing normal camera for 30 seconds\r\n"
         : "REC: preparing both cameras for 30 seconds\r\n");
@@ -162,8 +194,9 @@ static void CommandTask(void *argument)
             else Log(record_report.failed==RECORD_THERMAL ? "REC: normal camera saved; thermal recording failed\r\n"
                 : record_report.failed==RECORD_CAMERA ? "REC: thermal saved; normal camera recording failed\r\n"
                 : record_report.failed ? "REC: both recordings failed; check camera messages\r\n"
-                : "REC: done; both 10-second files saved\r\n");
+                : "REC: done; both recordings saved\r\n");
         }
+        RecordControl_PollArm();
         if (record_report.rx_overflows!=seen_overflows) {
             seen_overflows=record_report.rx_overflows; overflow=true;
         }
@@ -187,9 +220,9 @@ static void CommandTask(void *argument)
         }
         if (record_report.started && record_report.active && !announced) {
             Log(record_report.devices == RECORD_FLOW_LOG ? "FLOW LOG: collecting for 10 seconds\r\n"
-                : record_report.devices == RECORD_CAMERA ? "REC: recording normal camera for 10 seconds\r\n"
-                : record_report.devices == RECORD_THERMAL ? "REC: recording thermal camera for 10 seconds\r\n"
-                : "REC: recording both cameras for 10 seconds\r\n");
+                : record_report.devices == RECORD_CAMERA ? "REC: recording normal camera\r\n"
+                : record_report.devices == RECORD_THERMAL ? "REC: recording thermal camera\r\n"
+                : "REC: recording both cameras\r\n");
             announced=true;
         }
         if (HAL_GetTick()-last_patrol_status >= 1000U) {

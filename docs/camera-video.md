@@ -1,5 +1,85 @@
 # H743 camera recording
 
+## Arm-triggered video and synchronized telemetry CSV (2026-11-27)
+
+Normal Debug now starts camera-only recording from a fresh FC armed heartbeat.
+While armed it records successive bounded 30-second clips; fresh disarm stops
+the current clip and finalizes its files. Finalization/readback and next-clip
+sensor initialization introduce a gap between segments. Stale/disconnected
+telemetry cannot start a session or masquerade as a disarm. An automatic
+recording failure waits for a new disarm/re-arm cycle rather than continuously
+retrying SD failures. Existing manual `record` and `record cam` commands remain
+available. This code reads FC telemetry and sends no arming/flight command.
+
+Each real video receives a matching sidecar, e.g. VIDEO000.AVI / VIDEO000.CSV
+(or VIDEO000.MP4 / VIDEO000.CSV). Existing CSV names are reserved when choosing
+a new video index, so deleting only the video does not overwrite its log.
+The original UWB.CSV logger remains available independently.
+
+There is one telemetry row per saved video frame. `time_s` / `video_time_ms`
+use the finalized container timeline (`frame * duration / saved_frames`),
+so they correspond to playback position. `capture_time_ms` separately reports
+the actual sampling time relative to the recording start; `uptime_ms` is the
+MCU clock. Sensors are sampled after capture and buffered in RAM; CSV I/O
+happens after the movie is finalized, avoiding per-frame CSV SD delays.
+
+CSV fields:
+
+```text
+time_s,video_time_ms,frame,capture_time_ms,uptime_ms,uwb_distance_m,uwb_heading_deg,gps_lat_deg,gps_lon_deg,gps_alt_msl_m,uwb_zero_phase_raw,distance_samples,heading_samples
+```
+
+Missing/stale readings are literal `NA`, including all GPS coordinates and
+altitude when there is no fix. A fresh 2D fix supplies latitude/longitude with
+altitude `NA`; altitude is mean sea level, not height above ground. NAV-PVT
+is preferred; NMEA GGA/GSA is used only before PVT starts. GPS expires after
+1500 ms; UWB expires after 500 ms and a failed latest exchange is invalid.
+
+UWB distance and phase each use the last ten valid measurement samples,
+discard the two extremes at each end, and average the remaining six. No value
+is emitted before the full window is ready. Heading is the calibrated signed
+front-sector UWB bearing relative to the saved forward zero, not compass yaw.
+To recalibrate, face the beacon, wait for a full valid window, send `uwb zero`,
+and wait for the SD-save acknowledgement. The existing UWBZERO.BIN record is
+loaded at boot; `uwb_zero_phase_raw` identifies the applied calibration.
+
+Both video payloads and complete CSV contents are read back from SD and checked
+before success is reported. `video_log` exposes the CSV filename, row/byte
+counts, verification count and FatFs result. A CSV failure reports failure even
+when the video file itself was saved. Synthetic storage diagnostics do not
+create sensor logs. A short arm/disarm can end during preparation before a
+usable recording has begun.
+
+Validation: normal Debug, Release/internal-SRAM and SDRAM flow builds pass.
+Host tests exercise fresh/stale arm telemetry, disarm during preparation and
+capture, repeated armed segments, failure/re-arm recovery, ten-sample outlier
+rejection, circular phase wrapping, saved-zero journal recovery, positive/
+negative GPS coordinates, 2D/no-fix/stale GPS, CSV short writes, corrupt
+readback and the exact `time_s=10.000, uwb_distance_m=4.000` example.
+
+On the connected board, VIDEO000.AVI / VIDEO000.CSV contained 60 frames/rows
+over 6026 ms (9.96 FPS). The 2961-byte CSV was read back and verified, exported,
+then parsed for column count, literal NA and
+strictly increasing video times. A 30-second camera-only coordinator session
+saved VIDEO001.AVI / VIDEO001.CSV with 299 frames and matching rows (9.97 FPS),
+all video payloads and all 15589 CSV bytes verified. The CSV was exported as
+`build/video-telemetry-30s.csv`; row 100 maps to video 10.033 seconds, with
+actual capture time 10.095 seconds. A stop flag injected after frame 20
+finalized VIDEO002.AVI / VIDEO002.CSV at 2062 ms with 20 verified rows and a
+final row time of 1.958 seconds. This exercises the same stop path used by
+observed disarm without changing real FC arm telemetry.
+
+Arm-trigger behavior was tested with simulated FC telemetry on the host; the
+real drone was not armed. The live UWB radio initialized but received no
+beacon replies, no saved zero was loaded, and GPS had no fix, so all affected
+live CSV values correctly remained NA. Valid 4 m ranges, calibrated heading,
+saved/reloaded zero and GPS fix transitions were exercised in host tests.
+Evidence: `build/video-telemetry-board-result.txt`,
+`build/video-telemetry-30s-result.txt`, `build/video-telemetry-short-result.txt`,
+`build/video-telemetry-record-tests.txt`, `build/video-telemetry-uwb-tests.txt`
+and `build/video-telemetry-csv-tests.txt`. Flash was backed up as
+`build/before-video-telemetry-flash.bin` before the first trial.
+
 ## Approximately 10 FPS normal Debug profile (2026-11-27)
 
 Normal SDRAM Debug now defaults to native **800x600 MJPEG at a 100 ms target

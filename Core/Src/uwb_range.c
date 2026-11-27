@@ -19,6 +19,7 @@ extern void UWB_DriverFast(void);
 static UWB_RangeSnapshot shared, current;
 static uint8_t sequence;
 static UWB_PhaseFilter phase_filter;
+static UWB_DistanceFilter distance_filter;
 static bool zero_pending;
 static int16_t zero_raw;
 static float phase_offset_rad = UWB_PHASE_OFFSET_RAD;
@@ -55,7 +56,7 @@ static void publish(void)
 
 static bool load_saved_zero(int16_t *offset)
 {
-    FIL file;
+    static FIL file __attribute__((section(".sd_dma_buffer"), aligned(32)));
     if (AppStorage_Open(&file, zero_path, FA_READ) != FR_OK) return false;
 
     bool found = false;
@@ -83,7 +84,7 @@ static bool load_saved_zero(int16_t *offset)
 
 static bool save_zero(int16_t offset)
 {
-    FIL file;
+    static FIL file __attribute__((section(".sd_dma_buffer"), aligned(32)));
     if (AppStorage_Open(&file, zero_path, FA_OPEN_ALWAYS | FA_WRITE) != FR_OK)
         return false;
 
@@ -105,6 +106,7 @@ void UWB_RangeInit(void)
 {
     memset(&current, 0, sizeof current);
     memset(&phase_filter, 0, sizeof phase_filter);
+    memset(&distance_filter, 0, sizeof distance_filter);
     zero_pending = false;
     phase_offset_rad = UWB_PHASE_OFFSET_RAD;
     current.init_result = 1;
@@ -238,6 +240,7 @@ static void range_once(void)
     if (have_zero) {
         phase_offset_rad = (float)offset / 2048.0f;
         current.angle_calibrated = true;
+        current.zero_phase_raw = offset;
         const char *message = save_zero(offset) ?
             "UWB: forward zero saved to SD\r\n" :
             "UWB: forward zero applied; SD save failed (RAM only)\r\n";
@@ -247,6 +250,7 @@ static void range_once(void)
     const uint32_t events = SYS_STATUS_RXFCG_BIT_MASK |
         SYS_STATUS_ALL_RX_ERR | SYS_STATUS_ALL_RX_TO;
     current.valid = false;
+    current.distance_filtered_valid = false;
     current.pdoa_valid = false;
     current.angle_valid = false;
     current.pdoa_filtered_valid = false;
@@ -317,6 +321,9 @@ static void range_once(void)
     current.last_update_ms = HAL_GetTick();
     current.received++;
     current.valid = true;
+    current.distance_filtered_valid = UWB_FilterDistance(&distance_filter,
+        current.distance_mm, current.last_update_ms, &current.distance_filtered_mm);
+    current.distance_samples = distance_filter.count;
     /* A good payload CRC alone does not establish a good PDoA measurement. */
     current.pdoa_raw = dwt_readpdoa();
     int32_t quality = dwt_readstsquality(&current.sts_quality, 0);
@@ -338,6 +345,7 @@ static void range_once(void)
         current.angle_valid = UWB_PhaseToBearing(current.pdoa_filtered_raw,
             UWB_ANTENNA_SPACING_M, phase_offset_rad, config.chan,
             &current.bearing_mdeg);
+    current.heading_samples = phase_filter.count;
 }
 
 void UWB_RangeTask(void *argument)
@@ -350,6 +358,7 @@ void UWB_RangeTask(void *argument)
     if (current.init_result == 0 && load_saved_zero(&saved_offset)) {
         phase_offset_rad = (float)saved_offset / 2048.0f;
         current.angle_calibrated = true;
+        current.zero_phase_raw = saved_offset;
         static const char message[] = "UWB: loaded saved forward zero from SD\r\n";
         AppLog_Write(message, sizeof message - 1U, 100);
     }

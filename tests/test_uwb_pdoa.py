@@ -190,25 +190,31 @@ int main(void) {
     assert(config.stsMode == (DWT_STS_MODE_1 | DWT_STS_MODE_SDC));
     assert(rf_port == DWT_RF_PORT_AUTO_1_2);
     UWB_PhaseFilter filter = {0}; int16_t filtered;
-    for (unsigned i=0;i<4;++i)
+    for (unsigned i=0;i<9;++i)
         assert(!UWB_FilterPhase(&filter, 1000, i*100, &filtered));
-    assert(UWB_FilterPhase(&filter, 1000, 400, &filtered) && filtered==1000);
-    assert(UWB_FilterPhase(&filter, -5000, 500, &filtered) && filtered==1000);
-    assert(UWB_FilterPhase(&filter, -5000, 600, &filtered) && filtered==1000);
-    assert(UWB_FilterPhase(&filter, -5000, 700, &filtered) && filtered==-5000);
-    assert(!UWB_FilterPhase(&filter, 0, 1300, &filtered)); /* Gap resets history. */
+    assert(UWB_FilterPhase(&filter, 1000, 900, &filtered) && filtered==1000);
+    assert(UWB_FilterPhase(&filter, -5000, 1000, &filtered) && filtered==1000);
+    assert(UWB_FilterPhase(&filter, -5000, 1100, &filtered) && filtered==1000);
+    for(unsigned i=0;i<10;++i) UWB_FilterPhase(&filter,-5000,1200+i*100,&filtered);
+    assert(filtered==-5000); /* A real turn eventually replaces the window. */
+    assert(!UWB_FilterPhase(&filter, 0, 2700, &filtered)); /* Gap resets history. */
     memset(&filter,0,sizeof(filter));
-    const int16_t wrapped[] = {6400,-6400,6420,-6420,0};
-    for(unsigned i=0;i<5;++i) UWB_FilterPhase(&filter,wrapped[i],i*100,&filtered);
+    const int16_t wrapped[] = {6400,-6400,6420,-6420,6400,-6400,6420,-6420,0,0};
+    for(unsigned i=0;i<10;++i) UWB_FilterPhase(&filter,wrapped[i],i*100,&filtered);
     assert(abs(filtered)>6300); /* +/-180 wrap is not a false zero. */
     memset(&filter,0,sizeof(filter));
-    for(unsigned i=0;i<5;++i)
+    for(unsigned i=0;i<10;++i)
         UWB_FilterPhase(&filter,1000,UINT32_MAX-250U+i*100U,&filtered);
-    assert(filter.count==5); /* Tick wrap is not a long gap. */
+    assert(filter.count==10); /* Tick wrap is not a long gap. */
+    UWB_DistanceFilter distance={0};int32_t average;
+    const int32_t distances[]={100,1000000,3990,4000,4010,3980,4020,4005,3995,4000};
+    for(unsigned i=0;i<9;++i) assert(!UWB_FilterDistance(&distance,distances[i],i*100,&average));
+    assert(UWB_FilterDistance(&distance,distances[9],900,&average) && average==4000);
+    assert(!UWB_FilterDistance(&distance,4000,1501,&average));
     int16_t saved_offset;
     assert(!load_saved_zero(&saved_offset));
     UWB_RangeInit(); assert(!UWB_RangeZeroBearing());
-    for(unsigned i=0;i<5;++i) { now+=100; good(); }
+    for(unsigned i=0;i<10;++i) { now+=100; good(); }
     current.init_result=0; publish(); assert(UWB_RangeZeroBearing());
     now+=100; range_once(); assert(current.angle_valid && current.bearing_mdeg==0);
     assert(load_saved_zero(&saved_offset) && saved_offset == 1024);

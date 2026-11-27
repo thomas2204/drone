@@ -11,9 +11,12 @@ typedef struct {
     uint32_t start_ms, duration_ms, started;
     uint32_t rx_bytes, rx_errors, rx_overflows, commands, busy_commands;
     uint32_t devices;
+    uint32_t automatic, stop_requested;
 } RecordReport;
 extern volatile RecordReport record_report;
 bool RecordControl_Init(void);
+/* Read fresh FC arm telemetry; starts camera-only segments, never arms the FC. */
+void RecordControl_PollArm(void);
 bool RecordControl_TakeRequest(uint32_t device);
 bool RecordControl_WaitStart(uint32_t device);
 bool RecordControl_HasTime(void);

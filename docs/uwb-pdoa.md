@@ -76,19 +76,27 @@ must be accounted for in a future tracking estimator.
 
 ## Coarse angle filtering
 
-The displayed angle uses a five-sample circular median at the actual UWB task
-rate (roughly 7-10 samples/second), not the once-per-second Bluetooth log rate.
-It suppresses up to two isolated spikes in a five-sample window and handles
-phase wrapping at +/-180 degrees. A sustained change is accepted as the new
-direction after it becomes the majority, rather than locking to an old value.
-There is roughly a few tenths of a second of step response delay.
+The displayed/logged angle uses a ten-sample circular trimmed mean at the
+actual UWB task rate (roughly 7-10 samples/second). Samples are unwrapped around
+a circular medoid, sorted, and the lowest two and highest two are discarded.
+The remaining six samples are averaged before applying the saved forward-zero
+offset and converting phase to bearing. This handles wrapping at +/-180
+degrees. A sustained change replaces the window in about one second; smoothing
+introduces lag. Distance has a separate ten-sample trimmed mean using the same
+two-at-each-end rejection. The original raw distance remains available.
 
-A gap over 500 ms between valid phase samples clears history. Five new valid
+A gap over 500 ms between valid phase samples clears history. Ten new valid
 samples are required afterwards. Invalid current readings never produce a held
 old angle. Filtering does not correct persistent multipath bias or prove which
 physical side corresponds to a positive reading. Check a left/right movement
 once before interpreting the sign. This is approximate front-sector angle
 display only; no automatic flight control was added.
+
+`uwb zero` now captures this ten-sample filtered phase. Saved records remain
+compatible with `UWBZERO.BIN`; the latest intact record is loaded on startup.
+The calibration file's FatFs sector buffers are in DMA-accessible AXI SRAM.
+Paired video CSV files contain the applied zero phase and calibrated signed
+bearing in degrees; this is a relative front-sector bearing, not compass yaw.
 
 ## Diagnostics and ranging
 

@@ -123,6 +123,7 @@ if(APP_CAMERA_ENABLED)
         endif()
     endif()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        Core/Src/video_log.c
         Core/Src/camera_snapshot.c Core/Src/camera_jpeg.c Core/Src/camera_sccb.c
         Core/Src/camera_avi.c Core/Src/camera_bgr.c Core/Src/camera_h264.c
         Core/Src/camera_mp4.c Drivers/Camera/tjpgd/tjpgd.c)

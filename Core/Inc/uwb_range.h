@@ -36,6 +36,10 @@ typedef struct {
     uint32_t last_update_ms;
     int32_t distance_mm;
     bool valid;               /* latest attempt succeeded; also check sample age */
+    int32_t distance_filtered_mm;
+    bool distance_filtered_valid;
+    uint8_t distance_samples, heading_samples;
+    int16_t zero_phase_raw;    /* Saved/applied forward-zero phase, radians * 2048. */
 } UWB_RangeSnapshot;
 
 /* Call once before the scheduler, then run UWB_RangeTask in its own thread.
