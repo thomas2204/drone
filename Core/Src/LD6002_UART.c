@@ -86,6 +86,7 @@ volatile HAL_StatusTypeDef ld_rx_status;
 void LD6002_RxRestart(void)
 {
     ld_restarts++;
+    (void)HAL_UART_AbortReceive(&huart3);
     ld_tail = 0;
     __HAL_UART_CLEAR_FEFLAG(&huart3);
     __HAL_UART_CLEAR_NEFLAG(&huart3);
@@ -113,6 +114,7 @@ static void log_frame(uint32_t now, const ld6002_data_t *d)
 
 void LD6002_Task(void *arg)
 {
+    osDelay(3000);
     LD6002_Start();
     uint32_t last_log = 0;
     for (;;) {
