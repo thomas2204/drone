@@ -20,6 +20,23 @@ class Pdoa(unittest.TestCase):
             (work / 'FreeRTOS.h').write_text(
                 '#define taskENTER_CRITICAL() ((void)0)\n#define taskEXIT_CRITICAL() ((void)0)\n')
             (work / 'task.h').write_text('')
+            (work / 'app_log.h').write_text(
+                '#include <stdint.h>\nint AppLog_Write(const void *, uint16_t, uint32_t);\n')
+            (work / 'app_storage.h').write_text('''
+#include <stdint.h>
+typedef char TCHAR;
+typedef uint32_t DWORD;
+typedef unsigned UINT;
+typedef struct { DWORD cursor; } FIL;
+enum { FR_OK, FR_NO_FILE };
+enum { FA_READ = 1, FA_WRITE = 2, FA_OPEN_ALWAYS = 16 };
+int AppStorage_Open(FIL *, const TCHAR *, uint8_t);
+int AppStorage_Close(FIL *);
+DWORD f_size(const FIL *);
+int f_lseek(FIL *, DWORD);
+int f_read(FIL *, void *, UINT, UINT *);
+int f_write(FIL *, const void *, UINT, UINT *);
+''')
             source = (ROOT / 'Core/Src/uwb_range.c').as_posix()
             (work / 'exercise.c').write_text(r'''
 #include <assert.h>
@@ -28,6 +45,34 @@ class Pdoa(unittest.TestCase):
 static uint32_t now = 10, radio_status;
 static int quality_result, sts_bad, frame_length = 20, decode_ok = 1;
 static int64_t fake_tdoa;
+static uint8_t card_bytes[64];
+static DWORD card_size;
+int AppLog_Write(const void *p, uint16_t size, uint32_t timeout) {
+    (void)p; (void)size; (void)timeout; return 0;
+}
+int AppStorage_Open(FIL *file, const TCHAR *path, uint8_t mode) {
+    assert(strcmp(path, "0:/UWBZERO.BIN") == 0);
+    file->cursor = 0;
+    return mode == FA_READ && card_size == 0 ? FR_NO_FILE : FR_OK;
+}
+int AppStorage_Close(FIL *file) { (void)file; return FR_OK; }
+DWORD f_size(const FIL *file) { (void)file; return card_size; }
+int f_lseek(FIL *file, DWORD offset) { file->cursor = offset; return FR_OK; }
+int f_read(FIL *file, void *data, UINT size, UINT *read) {
+    assert(file->cursor + size <= card_size);
+    memcpy(data, &card_bytes[file->cursor], size);
+    file->cursor += size;
+    *read = size;
+    return FR_OK;
+}
+int f_write(FIL *file, const void *data, UINT size, UINT *written) {
+    assert(file->cursor + size <= sizeof card_bytes);
+    memcpy(&card_bytes[file->cursor], data, size);
+    file->cursor += size;
+    if (file->cursor > card_size) card_size = file->cursor;
+    *written = size;
+    return FR_OK;
+}
 uint32_t HAL_GetTick(void) { return now; }
 void osDelay(uint32_t ms) { now += ms; }
 int UWB_DriverProbe(void) { return 0; }
@@ -160,10 +205,19 @@ int main(void) {
     for(unsigned i=0;i<5;++i)
         UWB_FilterPhase(&filter,1000,UINT32_MAX-250U+i*100U,&filtered);
     assert(filter.count==5); /* Tick wrap is not a long gap. */
+    int16_t saved_offset;
+    assert(!load_saved_zero(&saved_offset));
     UWB_RangeInit(); assert(!UWB_RangeZeroBearing());
     for(unsigned i=0;i<5;++i) { now+=100; good(); }
     current.init_result=0; publish(); assert(UWB_RangeZeroBearing());
     now+=100; range_once(); assert(current.angle_valid && current.bearing_mdeg==0);
+    assert(load_saved_zero(&saved_offset) && saved_offset == 1024);
+    card_bytes[card_size++] = 'U'; /* Interrupted write. */
+    assert(load_saved_zero(&saved_offset) && saved_offset == 1024);
+    assert(save_zero(-2048));
+    assert(load_saved_zero(&saved_offset) && saved_offset == -2048);
+    card_bytes[card_size - 1U] ^= 1U;
+    assert(load_saved_zero(&saved_offset) && saved_offset == 1024);
     publish(); now+=600; assert(!UWB_RangeZeroBearing());
     range_once(); assert(!current.pdoa_filtered_valid && !current.angle_valid);
     puts("PDoA quality, stale/error handling, signed TDoA and bearing geometry passed");

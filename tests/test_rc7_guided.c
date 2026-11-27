@@ -92,6 +92,61 @@ int main(void)
                               test.started_ms + 12000U);
     assert(action.type == PATROL_SET_MODE && action.mode == 9U);
 
+    Rc7Guided low_hover = test;
+    low_hover.settling = false;
+    PatrolInput low = in;
+    uint32_t low_now = now;
+    low.height = 0.36f;
+    low.z = -0.21f;
+    low.vz = -0.12f; /* Log 2 reported a climb during the low hover. */
+    hold_switch(&low_hover, &low, 1500U, &low_now, 5U);
+    action = tick(&low_hover, &low, 1500U, &low_now);
+    assert(low_hover.state == RC7_HEIGHT_ADJUST && action.type == PATROL_TARGET);
+    assert(action.x == low.x && action.y == low.y && action.z == low.z);
+    float previous_z = action.z;
+    for (unsigned i = 0; i < 20U; ++i) {
+        action = tick(&low_hover, &low, 1500U, &low_now);
+        assert(action.type == PATROL_TARGET && low_hover.state == RC7_HEIGHT_ADJUST);
+        assert(action.x == low.x && action.y == low.y);
+        assert(action.z <= previous_z && previous_z - action.z <= 0.0151f);
+        assert(low.z - action.z <= 0.2001f);
+        previous_z = action.z;
+    }
+    assert(fabsf(low.z - action.z - 0.20f) < 0.001f);
+    Rc7Guided stuck_low = low_hover;
+    action = Rc7Guided_Update(&stuck_low, &low, 36U, true, 1500U,
+                              low_hover.started_ms + 8000U);
+    assert(action.type == PATROL_SET_MODE && action.mode == 9U);
+
+    Rc7Guided overshot_height = low_hover;
+    PatrolInput high = low;
+    high.height = 0.61f;
+    high.z = -0.46f;
+    action = Rc7Guided_Update(&overshot_height, &high, 61U, true, 1500U, low_now + 200U);
+    assert(action.type == PATROL_SET_MODE && action.mode == 9U);
+
+    Rc7Guided cancel_adjust = low_hover;
+    uint32_t adjust_cancel_now = low_now;
+    for (unsigned i = 0; i < 3U; ++i)
+        action = tick(&cancel_adjust, &low, 2000U, &adjust_cancel_now);
+    assert(cancel_adjust.state == RC7_HOVER && cancel_adjust.forward_used && action.z == low.z);
+
+    low.height = 0.49f;
+    low.z = -0.34f;
+    low.vz = 0.0f;
+    for (unsigned i = 0; i < 5U; ++i) {
+        action = tick(&low_hover, &low, 1500U, &low_now);
+        assert(low_hover.state == RC7_HEIGHT_ADJUST && fabsf(action.z + 0.35f) < 0.001f);
+    }
+    action = tick(&low_hover, &low, 1500U, &low_now);
+    assert(low_hover.state == RC7_HOVER && action.x == low.x && action.y == low.y);
+    for (unsigned i = 0; i < 5U; ++i) {
+        action = tick(&low_hover, &low, 1500U, &low_now);
+        assert(low_hover.state == RC7_HOVER && action.x == low.x && action.y == low.y);
+    }
+    action = tick(&low_hover, &low, 1500U, &low_now);
+    assert(low_hover.state == RC7_FORWARD && action.y > low.y);
+
     for (unsigned i = 0; i < 8U; ++i) {
         in.height = i % 2U == 0U ? 0.55f : 0.45f;
         in.z = 0.15f - in.height;

@@ -91,7 +91,7 @@ static void Command(char *line)
     }
     if (!strcmp(begin,"uwb zero")) {
         Log(UWB_RangeZeroBearing() ?
-            "UWB: forward zero captured; approximate angle enabled (RAM only)\r\n" :
+            "UWB: forward zero captured; saving to SD\r\n" :
             "UWB: zero failed; wait for fresh filtered phase, then retry\r\n");
         return;
     }

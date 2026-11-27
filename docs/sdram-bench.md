@@ -1,5 +1,84 @@
 # SDRAM bench test
 
+## OV2640 application trial (2026-11-27)
+
+An opt-in normal-application build now uses the lower 2 MiB for the OV2640
+128 KiB JPEG capture buffer and 225 KiB decoded BGR buffer. This frees 353 KiB
+of AXI SRAM. Buffer sizes, recording commands and video formats are unchanged;
+this first integration does not add double buffering or claim higher FPS.
+FatFs objects and the aligned 4 KiB SD staging buffer remain in internal SRAM.
+
+```powershell
+cmake --preset CameraSDRAM
+cmake --build --preset CameraSDRAM
+```
+
+The preset inherits the normal Debug application settings. In VS Code select
+**STM32Cube: Drone + OV2640 SDRAM trial** to flash
+`build/CameraSDRAM/projects.elf`; build it explicitly before launching.
+Other presets retain `CAMERA_USE_SDRAM=OFF` unless explicitly enabled.
+
+At boot, after FMC initialization and before tasks start, the application sends
+the chip startup commands and programs refresh. It maps only
+0xC0000000..0xC01FFFFF as noncacheable, non-executable Normal memory, then
+destructively tests that 2 MiB with six write/read patterns and 100 ms retention
+delays. Startup takes at least 600 ms longer. The buffers are NOLOAD and are
+not accessed by the reset handler. A detected initialization or comparison
+failure blocks camera capture and live-camera streaming; other tasks still
+start. An external-memory bus fault can still stop boot.
+
+Inspect `camera_sdram` after boot: `result=1` and `tested_bytes=2097152` mean
+the CPU memory check passed. `result=-1` means startup/clock/cache rejection;
+`result=-2` includes the failing `address`, `expected` and `actual`.
+Camera requests report `CAMERA_SDRAM` (failure 13) when memory is unavailable.
+The upper 30 MiB remain inaccessible through the CPU MPU, and PG1 remains in
+ordinary AF12 FMC mode; the manual-A11 diagnostic is not used.
+
+For hardware validation, first request a single JPEG
+(`camera_snapshot_video_frames=0`, `camera_snapshot_request=1`), inspect
+`camera_snapshot` for successful capture and SD reread verification, then test
+the normal video recording command and decode the saved file. Probe 7 can
+exercise the actual DCMI DMA stream against the SDRAM capture buffer and D2
+SRAM (`dma_memory_pass[0]` and `[1]`), followed by raw camera acquisition.
+A CPU memory PASS alone does not validate camera DMA or video throughput.
+
+### Connected-board result, 2026-11-27
+
+After the user connected ST-Link, backed up all 2 MiB of existing flash to
+`build/before-sdram-trial-flash.bin`, then flashed and download-verified the
+normal application from `build/CameraSDRAM/projects.elf` (Debug preset with
+CAMERA_USE_SDRAM=ON). The lower-2-MiB boot test passed:
+`result=1, hal_status=0, tested_bytes=2097152`. The linker/runtime addresses
+were `video_bgr=0xC0000000` and `capture=0xC0038400`.
+
+The real OV2640 (sensor ID 0x2642) captured a 640x480 JPEG through DCMI DMA
+into SDRAM. `0:/PHOTO000.JPG` contained 13417 bytes; all were written and
+reread successfully. DMA, DCMI, SD and FatFs errors were zero. Exported the
+capture as `build/sdram-trial-photo.jpg`; Pillow decoded it as 640x480.
+
+Next, recorded 40 real 640x480 MJPEG frames to `0:/VIDEO000.AVI` in 2685 ms,
+approximately 14.90 FPS. All 506086 frame-payload bytes passed the recorder's
+SD readback/hash checks, with no DMA/DCMI/storage errors. Reported capture
+time was 2250 ms, write time 340 ms, and pacing time 115 ms. This is a short
+functional test, not a before/after FPS comparison or sustained-rate result.
+
+A separate four-frame `0:/VIDEO001.AVI` was reread from SD into the capture
+buffer and exported as `build/sdram-trial-video.avi` (51730 bytes). Container
+checks found four complete frames, matching header/index counts, no truncated
+chunks and a finalized RIFF size. FFmpeg decoded every frame with `-xerror`
+and exit 0. This validates the ordinary FMC SDRAM capture path and SD staging;
+it does not validate the upper 30 MiB, H.264/BGR processing or double buffering.
+
+Evidence: `build/sdram-trial-result.txt` (boot),
+`build/sdram-trial-photo-result.txt` (JPEG),
+`build/sdram-trial-video-result.txt` (40 frames),
+`build/sdram-trial-export-result.txt` (export) and
+`build/sdram-trial-video-decode.log` (empty successful decoder stderr).
+Left the SDRAM trial application running, with no pending camera request,
+export disabled, and the debugger's frame-count setting restored to 40.
+Files were closed and the camera's storage use released before detaching.
+The temporary GDB server was stopped after validation.
+
 The schematic and PCB at `D:/pcbs/dronetestv1/test.kicad_sch` and
 `test.kicad_pcb` identify U2 as W9825G6KH-6, connected to FMC SDRAM bank 1.
 The existing SD card/audio read path is already hardware-confirmed by the user.

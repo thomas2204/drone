@@ -53,10 +53,11 @@ This change does not automatically flash either board.
    directly ahead, wait at least one second for the filter to fill, then send
    `uwb zero` through Bluetooth. This captures the current filtered phase as
    forward and enables output such as `UWB angle approx: +12.3 deg`.
-   Zero fails if there is no fresh full filtered window. The captured offset
-   lives in RAM: repeat after restarting, or after changing antennas/cables.
-   For a persistent measured offset, set `UWB_PHASE_OFFSET_RAD` in the header
-   and enable `UWB_ANGLE_CALIBRATED`; no arbitrary log average is baked in.
+   Zero fails if there is no fresh full filtered window. Wait for
+   `UWB: forward zero saved to SD` before removing power. The board loads the
+   latest saved offset from `UWBZERO.BIN` at startup with the same SD card.
+   If saving fails, the new offset is usable until reboot. Repeat calibration
+   after changing the antenna mounting or cables.
 6. Check known angles on both sides and at multiple distances. Positive angle
    follows the chip's RF1/RF2 phase convention; verify the sign physically before
    interpreting it as right/left. If it is reversed, consistently swap RF1/RF2,

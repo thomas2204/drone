@@ -46,7 +46,7 @@ void UWB_RangeTaskUnavailable(void);
 void UWB_RangeTask(void *argument);
 bool UWB_RangeGetSnapshot(UWB_RangeSnapshot *out);
 /* Bluetooth command task: capture the current fresh filtered phase as straight
- * ahead. RAM only; the UWB task applies it without sharing driver access. */
+ * ahead. The UWB task applies it and reports the SD save result. */
 bool UWB_RangeZeroBearing(void);
 
 #endif

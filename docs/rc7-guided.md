@@ -26,6 +26,11 @@ takeover. The STM32 reads RC7 over MAVLink and waits for confirmation that
   conditions below for one second. The companion then holds a fixed
   vertical position target.
   It requests Land if takeoff has not completed within 12 seconds.
+  If the aircraft settles between 30 and 40 cm after confirmed liftoff,
+  the companion holds the horizontal position and raises the altitude
+  setpoint in steps of at most 1.5 cm, up to 20 cm total. It stops raising
+  the setpoint at a measured 48 cm. It requests Land if the adjustment
+  does not settle within eight seconds or leaves the 30–60 cm range.
   After one steady second within 10 cm of target, with the range
   staying within 3 cm of its value at the start of that second and the
   EKF reporting low speed, it moves 1 m along the current heading.

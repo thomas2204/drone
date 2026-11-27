@@ -6,6 +6,7 @@
 typedef enum {
     RC7_IDLE,
     RC7_TAKEOFF,
+    RC7_HEIGHT_ADJUST,
     RC7_HOVER,
     RC7_FORWARD,
     RC7_RETURN,
@@ -15,10 +16,11 @@ typedef enum {
 typedef struct {
     Rc7GuidedState state;
     uint8_t pending_switch, stable_switch;
-    bool saw_low, forward_used, settling, start_qualified;
+    bool saw_low, forward_used, settling, settling_low, start_qualified;
     uint32_t switch_ms, started_ms, settled_ms, qualified_ms, land_send_ms, ack_serial;
+    uint32_t height_adjust_ms;
     float origin_x, origin_y, origin_z, floor_reference;
-    float settling_height;
+    float settling_height, height_adjust_limit_z;
     float target_x, target_y, target_z, yaw, command_x, command_y;
 } Rc7Guided;
 

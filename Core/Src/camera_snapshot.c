@@ -1,4 +1,10 @@
 #include "camera_snapshot.h"
+#if CAMERA_USE_SDRAM
+#include "camera_sdram.h"
+#define CAMERA_FRAME_SECTION ".camera_sdram"
+#else
+#define CAMERA_FRAME_SECTION ".sd_dma_buffer"
+#endif
 #include "camera_jpeg.h"
 #include "camera_sccb.h"
 #include "camera_user_table.h"
@@ -42,15 +48,15 @@ volatile uint32_t camera_snapshot_dcmi_polarities = 4;
 volatile uint32_t camera_snapshot_video_uncompressed = CAMERA_FAST_MJPEG ? 0U : 1U;
 volatile uint32_t camera_snapshot_video_mp4 = CAMERA_FAST_MJPEG ? 0U : 1U;
 volatile uint32_t camera_snapshot_export_recording;
-/* AXI SRAM is accessible to both DCMI DMA1 and SDMMC1 IDMA. DTCM is not. */
+/* Only the frame buffers move to SDRAM; FatFs and I/O stay in AXI SRAM. */
 static uint32_t capture[CAPTURE_BYTES / 4]
-    __attribute__((section(".sd_dma_buffer"), aligned(32)));
+    __attribute__((section(CAMERA_FRAME_SECTION), aligned(32)));
 static uint8_t io_buffer[IO_BYTES]
     __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static uint32_t raw_d2[4096]
     __attribute__((section(".dma_buffer"), aligned(32)));
 static uint8_t video_bgr[320U * 240U * 3U]
-    __attribute__((section(".sd_dma_buffer"), aligned(32)));
+    __attribute__((section(CAMERA_FRAME_SECTION), aligned(32)));
 static FIL camera_file __attribute__((section(".sd_dma_buffer"), aligned(32)));
 static volatile uint32_t frame_done, capture_error;
 static volatile CameraSnapshotReport *volatile camera_capture_report = &camera_snapshot;
@@ -979,6 +985,10 @@ static bool InitRecordingSensor(void)
 
 static void StreamCamera(void)
 {
+#if CAMERA_USE_SDRAM
+    /* Also covers the streaming call inside RecordFlowLog. */
+    if (camera_sdram.result != 1) return;
+#endif
     const uint32_t now = HAL_GetTick();
     if ((int32_t)(now - live_camera.next_ms) < 0) return;
     live_camera.next_ms = now + 67U;
@@ -1275,12 +1285,17 @@ void CameraSnapshot_Task(void *argument)
             for (unsigned i = 0; i < 3U; ++i) camera_snapshot.bank_readback[i] = 0xFFFFFFFFU;
             Log(camera_snapshot.video_requested
                 ? (camera_snapshot.video_mp4
-                    ? "\r\nCAMERA: H.264 MP4 to SD; internal SRAM\r\n"
+                    ? "\r\nCAMERA: H.264 MP4 to SD\r\n"
                     : camera_snapshot.video_uncompressed
-                    ? "\r\nCAMERA: uncompressed RGB24 AVI to SD; internal SRAM\r\n"
+                    ? "\r\nCAMERA: uncompressed RGB24 AVI to SD\r\n"
                     : "\r\nCAMERA: direct 640x480 MJPEG AVI to SD\r\n")
-                : "\r\nCAMERA: single JPEG to SD; internal SRAM\r\n");
+                : "\r\nCAMERA: single JPEG to SD\r\n");
             bool ok;
+#if CAMERA_USE_SDRAM
+            Log("CAMERA: frame buffers in lower 2 MiB SDRAM\r\n");
+            if (camera_sdram.result != 1) ok = Fail(CAMERA_SDRAM);
+            else
+#endif
             if (SCB->CCR & SCB_CCR_DC_Msk) ok = Fail(CAMERA_CACHE_ENABLED);
             else if (camera_snapshot.probe_registers == 8U) ok = ProbeDCMIInput();
             else if (camera_snapshot.probe_registers == 6U) {

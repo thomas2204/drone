@@ -3,6 +3,8 @@
 #include "uwb_range.h"
 #include "uwb_protocol.h"
 #include "uwb_angle.h"
+#include "app_log.h"
+#include "app_storage.h"
 #include "main.h"
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
@@ -20,6 +22,9 @@ static UWB_PhaseFilter phase_filter;
 static bool zero_pending;
 static int16_t zero_raw;
 static float phase_offset_rad = UWB_PHASE_OFFSET_RAD;
+static const TCHAR zero_path[] = "0:/UWBZERO.BIN";
+static const uint8_t zero_signature[] = {'U', 'W', 'B', '1'};
+#define ZERO_RECORD_SIZE 8U
 /* Two antennas on RF1/RF2; hardware switches during the STS sequence. */
 static const dwt_rf_port_ctrl_e rf_port = DWT_RF_PORT_AUTO_1_2;
 /* Match the 4096-symbol F103 test profile. Its response is scheduled 8000 us
@@ -46,6 +51,54 @@ static void publish(void)
     taskENTER_CRITICAL();
     shared = current;
     taskEXIT_CRITICAL();
+}
+
+static bool load_saved_zero(int16_t *offset)
+{
+    FIL file;
+    if (AppStorage_Open(&file, zero_path, FA_READ) != FR_OK) return false;
+
+    bool found = false;
+    DWORD end = f_size(&file);
+    end -= end % ZERO_RECORD_SIZE;
+    /* A partial or corrupt final save must not hide the preceding calibration. */
+    while (end >= ZERO_RECORD_SIZE) {
+        uint8_t record[ZERO_RECORD_SIZE];
+        UINT size;
+        end -= ZERO_RECORD_SIZE;
+        if (f_lseek(&file, end) != FR_OK ||
+            f_read(&file, record, sizeof record, &size) != FR_OK ||
+            size != sizeof record)
+            break;
+        if (memcmp(record, zero_signature, sizeof zero_signature) != 0 ||
+            record[4] + record[6] != UINT8_MAX || record[5] + record[7] != UINT8_MAX)
+            continue;
+        const int32_t value = (int32_t)record[4] | (int32_t)record[5] << 8;
+        *offset = (int16_t)(value <= INT16_MAX ? value : value - 65536);
+        found = true;
+        break;
+    }
+    return AppStorage_Close(&file) == FR_OK && found;
+}
+
+static bool save_zero(int16_t offset)
+{
+    FIL file;
+    if (AppStorage_Open(&file, zero_path, FA_OPEN_ALWAYS | FA_WRITE) != FR_OK)
+        return false;
+
+    const uint16_t value = (uint16_t)offset;
+    uint8_t record[ZERO_RECORD_SIZE];
+    memcpy(record, zero_signature, sizeof zero_signature);
+    record[4] = (uint8_t)value;
+    record[5] = (uint8_t)(value >> 8);
+    record[6] = (uint8_t)~record[4];
+    record[7] = (uint8_t)~record[5];
+    const DWORD end = f_size(&file);
+    UINT size;
+    const bool written = f_lseek(&file, end - end % ZERO_RECORD_SIZE) == FR_OK &&
+        f_write(&file, record, sizeof record, &size) == FR_OK && size == sizeof record;
+    return AppStorage_Close(&file) == FR_OK && written;
 }
 
 void UWB_RangeInit(void)
@@ -178,12 +231,18 @@ bool UWB_RangeZeroBearing(void)
 static void range_once(void)
 {
     taskENTER_CRITICAL();
-    if (zero_pending) {
-        phase_offset_rad = (float)zero_raw / 2048.0f;
-        current.angle_calibrated = true;
-        zero_pending = false;
-    }
+    const bool have_zero = zero_pending;
+    const int16_t offset = zero_raw;
+    zero_pending = false;
     taskEXIT_CRITICAL();
+    if (have_zero) {
+        phase_offset_rad = (float)offset / 2048.0f;
+        current.angle_calibrated = true;
+        const char *message = save_zero(offset) ?
+            "UWB: forward zero saved to SD\r\n" :
+            "UWB: forward zero applied; SD save failed (RAM only)\r\n";
+        AppLog_Write(message, (uint16_t)strlen(message), 100);
+    }
     uint8_t poll[] = {0x41, 0x88, 0, 0x9a, 0x60, 'W', 'A', 'V', 'E', 0xe0, 0, 0};
     const uint32_t events = SYS_STATUS_RXFCG_BIT_MASK |
         SYS_STATUS_ALL_RX_ERR | SYS_STATUS_ALL_RX_TO;
@@ -287,6 +346,13 @@ void UWB_RangeTask(void *argument)
     /* Let Bluetooth/GPS start before touching the optional UWB hardware. */
     osDelay(2000);
     current.init_result = initialise();
+    int16_t saved_offset;
+    if (current.init_result == 0 && load_saved_zero(&saved_offset)) {
+        phase_offset_rad = (float)saved_offset / 2048.0f;
+        current.angle_calibrated = true;
+        static const char message[] = "UWB: loaded saved forward zero from SD\r\n";
+        AppLog_Write(message, sizeof message - 1U, 100);
+    }
     publish();
     if (current.init_result != 0) {
         /* Keep the failure visible, and leave all other application tasks running. */

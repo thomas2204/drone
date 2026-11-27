@@ -2,8 +2,18 @@
  * Kept separate so regeneration cannot discard the DMA memory placement.
  * RAM is D1 AXI SRAM; RAM_D2 is SRAM for DMA1/DMA2 buffers.
  */
+/* Limited to the region validated with ordinary FMC addressing. */
+MEMORY
+{
+  CAMERA_SDRAM (rw) : ORIGIN = 0xC0000000, LENGTH = 2M
+}
 SECTIONS
 {
+  .camera_sdram (NOLOAD) : ALIGN(32)
+  {
+    *(.camera_sdram*)
+    . = ALIGN(32);
+  } >CAMERA_SDRAM
   .sd_dma_buffer (NOLOAD) : ALIGN(32)
   {
     *(.sd_dma_buffer)

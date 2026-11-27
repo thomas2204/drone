@@ -35,6 +35,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#if CAMERA_USE_SDRAM
+#include "camera_sdram.h"
+#endif
 #if BOARD_BENCH_TEST
 #include "board_bench.h"
 #endif
@@ -138,6 +141,9 @@ int main(void)
   MX_UART7_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+#if CAMERA_USE_SDRAM
+  (void)CameraSDRAM_Init(); /* Failure disables camera buffer access only. */
+#endif
   /* USER CODE END 2 */
 
   /* Init scheduler */
