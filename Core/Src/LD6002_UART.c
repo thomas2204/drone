@@ -58,8 +58,8 @@ void LD6002_Start(void)
         Error_Handler();
     }
     //USART3->CR3 |= USART_CR3_DMAR;
-    static const uint8_t q[] = {0x01,0x00,0x01,0x00,0x00,0xFF,0xFF,0xFF};
-    HAL_UART_Transmit(&huart3, q, sizeof q, 100);
+    //static const uint8_t q[] = {0x01,0x00,0x01,0x00,0x00,0xFF,0xFF,0xFF};
+    //HAL_UART_Transmit(&huart3, q, sizeof q, 100);
     
 }
 
@@ -81,27 +81,17 @@ void LD6002_Poll(void)
 
 /* If an overrun or framing error stops reception, restart it. */
 volatile uint32_t ld_restarts;
+volatile HAL_StatusTypeDef ld_rx_status;
+
 void LD6002_RxRestart(void)
 {
     ld_restarts++;
     ld_tail = 0;
-
-    // 1. Abort current reception
-    //(void)HAL_UART_AbortReceive(&huart3);
-
-    // 2. Force clear all UART error flags (especially ORE)
-    //__HAL_UART_CLEAR_FLAG(&huart3, UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_FEF | UART_CLEAR_PEF);
-
-    // 3. Clear DMA error flags
-    //__HAL_DMA_CLEAR_FLAG(&hdma_usart3_rx, __HAL_DMA_GET_TE_FLAG_INDEX(&hdma_usart3_rx));
-    //__HAL_DMA_CLEAR_FLAG(&hdma_usart3_rx, __HAL_DMA_GET_DME_FLAG_INDEX(&hdma_usart3_rx));
-    //__HAL_DMA_CLEAR_FLAG(&hdma_usart3_rx, __HAL_DMA_GET_FE_FLAG_INDEX(&hdma_usart3_rx));
-
-    // 4. Restart DMA
-    if (HAL_UART_Receive_DMA(&huart3, ld_rx, LD_RX_SZ) != HAL_OK) {
-        // Error handling
-    }
-    //USART3->CR3 |= USART_CR3_DMAR;
+    __HAL_UART_CLEAR_FEFLAG(&huart3);
+    __HAL_UART_CLEAR_NEFLAG(&huart3);
+    __HAL_UART_CLEAR_OREFLAG(&huart3);
+    __HAL_UART_FLUSH_DRREGISTER(&huart3);
+    ld_rx_status = HAL_UART_Receive_DMA(&huart3, ld_rx, LD_RX_SZ);
 }
 
 static int x100(float v) { return (int)(v * 100.0f + (v < 0.0f ? -0.5f : 0.5f)); }

@@ -221,7 +221,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
-    if (uart == &huart3) { LD6002_RxRestart(); return; }
+    if (uart == &huart3)
+        return;                 /* LD6002_Poll() restarts reception in task context */
+
     if (uart != &huart7) return;
     record_report.rx_errors++;
     if (uart->RxState == HAL_UART_STATE_READY)

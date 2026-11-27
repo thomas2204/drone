@@ -214,6 +214,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/ld6002.c
     Core/Src/LD6002_UART.c
     Core/Src/thermal_dma.c
+    Core/Src/uwb_log.c
 )
 # Qorvo DW3000 driver and the drone's SS-TWR initiator.
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
