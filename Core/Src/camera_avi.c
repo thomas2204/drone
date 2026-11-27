@@ -69,7 +69,7 @@ bool CameraAVI_Frame(CameraAVI *a, const void *jpeg, uint32_t bytes)
 {
     uint32_t raw_bytes = ((a->width * 3U + 3U) & ~3U) * a->height;
     if (a->failed || a->frames >= CAMERA_AVI_MAX_FRAMES || !jpeg || bytes < 4 ||
-        (a->uncompressed ? bytes != raw_bytes : bytes > 131072U)) return false;
+        (a->uncompressed ? bytes != raw_bytes : bytes > CAMERA_AVI_MAX_JPEG_BYTES)) return false;
     uint8_t h[8]; memcpy(h, a->uncompressed ? "00db" : "00dc", 4); U32(h + 4, bytes);
     uint32_t offset = a->position - 220U;
     if (!Put(a, h, sizeof(h)) || !Put(a, jpeg, bytes)) return false;

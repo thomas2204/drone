@@ -3,10 +3,13 @@
 ## OV2640 application trial (2026-11-27)
 
 The normal Debug application now uses the lower 2 MiB for the OV2640
-128 KiB JPEG capture buffer and 225 KiB decoded BGR buffer. This frees 353 KiB
-of AXI SRAM. Buffer sizes, recording commands and video formats are unchanged;
-this first integration does not add double buffering or claim higher FPS.
-FatFs objects and the aligned 4 KiB SD staging buffer remain in internal SRAM.
+240 KiB JPEG capture buffer and 225 KiB decoded BGR buffer. Moving the original
+buffers freed 353 KiB of AXI SRAM; enlarging capture now uses only SDRAM.
+Normal Debug JPEG/MJPEG defaults to native 800x600 at approximately 10 FPS.
+1600x1200 remains selectable, but tested around 5 FPS. The original VGA
+integration results below are historical; see `camera-video.md` for UXGA.
+This integration does not add double buffering or claim higher FPS.
+FatFs objects and the aligned 16 KiB SD staging buffer remain in internal SRAM.
 
 ```powershell
 cmake --preset Debug

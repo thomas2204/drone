@@ -282,6 +282,22 @@ static const uint8_t ov2640_settings_to_svga[][2] = {
     {0, 0}
 };
 
+/* UXGA mode from the same pinned Espressif source as the other tables. */
+static const uint8_t ov2640_settings_to_uxga[][2] = {
+    {BANK_SEL, BANK_SENSOR}, {COM7, COM7_RES_UXGA},
+    {COM1, 0x0F}, {REG32, REG32_UXGA},
+    {HSTART, 0x11}, {HSTOP, 0x75}, {VSTART, 0x01}, {VSTOP, 0x97},
+    {0x3d, 0x34}, {BD50, 0xbb}, {BD60, 0x9c}, {0x5a, 0x57},
+    {0x6d, 0x80}, {0x39, 0x82}, {0x23, 0x00}, {0x07, 0xc0},
+    {0x4c, 0x00}, {0x35, 0x88}, {0x22, 0x0a}, {0x37, 0x40},
+    {ARCOM2, 0xa0}, {0x06, 0x02}, {COM4, 0xb7}, {0x0e, 0x01},
+    {0x42, 0x83}, {BANK_SEL, BANK_DSP}, {RESET, RESET_DVP},
+    {HSIZE8, 0xc8}, {VSIZE8, 0x96}, {SIZEL, 0x00},
+    {HSIZE, 0x90}, {VSIZE, 0x2c}, {XOFFL, 0x00}, {YOFFL, 0x00},
+    {VHYX, 0x88}, {TEST, 0x00},
+    {CTRL2, CTRL2_DCW_EN | 0x1d}, {CTRLI, 0x00}, {0, 0}
+};
+
 static const uint8_t ov2640_settings_jpeg3[][2] = {
     {BANK_SEL, BANK_DSP},
     {RESET, RESET_JPEG | RESET_DVP},

@@ -1,5 +1,22 @@
 #include "camera_jpeg.h"
 
+int CameraJPEG_FindIncremental(const uint8_t *data, size_t length, size_t *checked,
+                              size_t *offset, size_t *size,
+                              uint16_t *width, uint16_t *height)
+{
+    if (!data || !checked || *checked > length) return 0;
+    /* Include the previous byte so a marker split across DMA polls is seen.
+     * EOI-like metadata is only a hint; the existing parser still validates
+     * the complete frame and recovers after a damaged JPEG. */
+    size_t start = *checked ? *checked - 1U : 0U;
+    *checked = length;
+    for (size_t p = start; p + 1U < length; ++p) {
+        if (data[p] == 0xFF && data[p + 1U] == 0xD9)
+            return CameraJPEG_Find(data, length, offset, size, width, height);
+    }
+    return 0;
+}
+
 /* The caller has already found the start-of-image marker. */
 static int ParseJPEG(const uint8_t *data, size_t length, size_t *size,
                      uint16_t *width, uint16_t *height)

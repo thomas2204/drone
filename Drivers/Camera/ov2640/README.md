@@ -4,5 +4,8 @@ Source: https://github.com/espressif/esp32-camera/tree/b3f7fe802f41f17fd7a104d51
 
 CIF/JPEG tables retain Espressif copyright and Apache-2.0 terms. Register
 definitions retain their OpenMV copyright and MIT terms. The settings header
-was reduced to the three tables used by this STM32 application; ESP-specific
+was reduced to the tables used by this STM32 application; ESP-specific
 attributes were removed. Platform transactions and application code are local.
+
+The UXGA table is retained from that same pinned source for native 1600x1200
+JPEG capture. DSP output size and DVP divider follow its `set_window` routine.
