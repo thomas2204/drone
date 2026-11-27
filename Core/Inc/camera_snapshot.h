@@ -11,7 +11,7 @@ typedef enum {
     CAMERA_OK, CAMERA_I2C, CAMERA_SENSOR_ID, CAMERA_DMA, CAMERA_TIMEOUT,
     CAMERA_OVERFLOW, CAMERA_JPEG, CAMERA_SD, CAMERA_FS, CAMERA_DATA,
     CAMERA_CACHE_ENABLED, CAMERA_REGISTER_MISMATCH, CAMERA_PEER_FAILURE,
-    CAMERA_SDRAM
+    CAMERA_SDRAM, CAMERA_RESOLUTION
 } CameraFailure;
 typedef struct {
     uint32_t stage, failure, done;
@@ -66,8 +66,13 @@ extern volatile uint32_t camera_snapshot_dcmi_polarities;
 extern volatile uint32_t camera_snapshot_video_uncompressed;
 /* 1: H.264 MP4 at 320x240; 0: direct MJPEG AVI at 640x480 by default. */
 extern volatile uint32_t camera_snapshot_video_mp4;
-/* Debug export: reread a completed file into capture if it fits 128KiB. */
+/* Debug export: reread a completed file if it fits the capture buffer
+ * (240 KiB with SDRAM, 128 KiB with internal SRAM). */
 extern volatile uint32_t camera_snapshot_export_recording;
+/* Direct JPEG/MJPEG: 640, 800, 1024, 1280 or 1600 (4:3).
+ * SDRAM Debug defaults to 800 for approximately 10 FPS recording.
+ * Flow builds and internal-SRAM builds retain VGA; H.264 remains 320x240. */
+extern volatile uint32_t camera_snapshot_jpeg_width;
 void CameraSnapshot_Task(void *argument);
 #if CAMERA_FLOW_MAVLINK
 void CameraSnapshot_FlightLogTask(void *argument);

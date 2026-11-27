@@ -32,8 +32,15 @@
 #include <string.h>
 
 #define CAMERA_ADDRESS (0x30U << 1)
+#if CAMERA_USE_SDRAM
+/* Keep one transfer below the DMA's 65535-word limit. The capture accounting
+ * below intentionally uses single-buffer NDTR, not HAL's multi-buffer mode. */
+#define CAPTURE_BYTES CAMERA_AVI_MAX_JPEG_BYTES
+#else
 #define CAPTURE_BYTES (128U * 1024U)
-#define IO_BYTES 4096U
+#endif
+_Static_assert(CAPTURE_BYTES / 4U <= 65535U, "Capture must fit single DMA transfer");
+#define IO_BYTES (CAMERA_USE_SDRAM ? 16384U : 4096U)
 
 volatile CameraSnapshotReport camera_snapshot;
 volatile uint32_t camera_snapshot_request = BOARD_CAMERA_TEST ? 1U : 0U;
@@ -48,6 +55,9 @@ volatile uint32_t camera_snapshot_dcmi_polarities = 4;
 volatile uint32_t camera_snapshot_video_uncompressed = CAMERA_FAST_MJPEG ? 0U : 1U;
 volatile uint32_t camera_snapshot_video_mp4 = CAMERA_FAST_MJPEG ? 0U : 1U;
 volatile uint32_t camera_snapshot_export_recording;
+/* Flow calibration continues to use its established VGA profile. */
+volatile uint32_t camera_snapshot_jpeg_width =
+    CAMERA_USE_SDRAM && !CAMERA_FLOW_BENCH ? 800U : 640U;
 /* Only the frame buffers move to SDRAM; FatFs and I/O stay in AXI SRAM. */
 static uint32_t capture[CAPTURE_BYTES / 4]
     __attribute__((section(CAMERA_FRAME_SECTION), aligned(32)));
@@ -62,6 +72,28 @@ static volatile uint32_t frame_done, capture_error;
 static volatile CameraSnapshotReport *volatile camera_capture_report = &camera_snapshot;
 static bool commanded_recording;
 static uint16_t output_width=320, output_height=240;
+
+static bool SelectOutput(bool direct_jpeg)
+{
+    if (!direct_jpeg) {
+        output_width = 320; output_height = 240;
+        camera_snapshot.frame_period_ms = 250;
+        return true;
+    }
+    uint32_t width = camera_snapshot_jpeg_width;
+    if (width != 640U && width != 800U && width != 1024U &&
+        width != 1280U && width != 1600U) return false;
+#if !CAMERA_USE_SDRAM || CAMERA_FLOW_BENCH
+    if (width != 640U) return false;
+#endif
+    output_width = (uint16_t)width;
+    output_height = (uint16_t)(width * 3U / 4U);
+    camera_snapshot.frame_period_ms = width >= 800U ? 100U : 67U;
+#if CAMERA_FLOW_BENCH
+    camera_snapshot.frame_period_ms = 50U;
+#endif
+    return true;
+}
 
 static void Log(const char *message)
 {
@@ -497,7 +529,8 @@ static bool InitSensor(void)
     const uint8_t (*initial)[2] = ov2640_settings_cif;
     if (camera_capture_report->skip_dsp_prefix) initial += 3;
     if (!Table(initial) || !Write(0xFF, 0) || !Write(0x05, 1) ||
-        !Table(output_width > 400 ? ov2640_settings_to_svga : ov2640_settings_to_cif)) return false;
+        !Table(output_width > 800 ? ov2640_settings_to_uxga :
+               output_width > 400 ? ov2640_settings_to_svga : ov2640_settings_to_cif)) return false;
     /* Same CIF window/scaling sequence as the Espressif driver: 400x296
      * sensor window, downscaled to QVGA 320x240; JPEG DVP divider 8. */
     static const uint8_t qvga[][2] = {
@@ -511,7 +544,19 @@ static bool InitSensor(void)
         {0x57,0}, {0x5A,160}, {0x5B,120}, {0x5C,0},
         {0xFF,1}, {0x11,0}, {0xFF,0}, {0xD3,8}, {0x05,0}, {0,0}
     };
-    if (!Table(output_width > 400 ? vga : qvga)) return false;
+    /* Full 1600x1200 sensor window, no upscaling. ZMHH carries the upper
+     * output width/height bits; JPEG UXGA uses DVP divider 12. */
+    static const uint8_t uxga[][2] = {
+        {0xFF,0}, {0x51,0x90}, {0x52,0x2c}, {0x53,0}, {0x54,0}, {0x55,0x88},
+        {0x57,0}, {0x5A,0x90}, {0x5B,0x2c}, {0x5C,0x05},
+        {0xFF,1}, {0x11,0}, {0xFF,0}, {0xD3,12}, {0x05,0}, {0,0}
+    };
+    if (!Table(output_width > 800 ? uxga : output_width > 400 ? vga : qvga)) return false;
+    if (output_width >= 800U) {
+        uint16_t w = output_width / 4U, h = output_height / 4U;
+        if (!Write(ZMOW, (uint8_t)w) || !Write(ZMOH, (uint8_t)h) ||
+            !Write(ZMHH, (uint8_t)(((h >> 6) & 4U) | ((w >> 8) & 3U)))) return false;
+    }
     if (camera_snapshot_clockrc <= 0xFFU &&
         (!Write(0xFF, 1) || !Write(0x11, (uint8_t)camera_snapshot_clockrc) || !Write(0xFF, 0))) return false;
     /* Espressif's table ties HREF to VSYNC. STM32 DCMI needs the separate
@@ -546,7 +591,7 @@ void HAL_DCMI_ErrorCallback(DCMI_HandleTypeDef *handle)
 static bool Capture(uint32_t timeout_ms)
 {
     camera_capture_report->stage = CAMERA_CAPTURE;
-    memset(capture, 0, sizeof(capture));
+    memset(capture, 0, CAPTURE_BYTES);
     frame_done = capture_error = 0;
     uint32_t polarities = camera_snapshot_dcmi_polarities;
     hdcmi.Init.PCKPolarity = (polarities & 1U) ? DCMI_PCKPOLARITY_FALLING : DCMI_PCKPOLARITY_RISING;
@@ -570,9 +615,9 @@ static bool Capture(uint32_t timeout_ms)
     camera_capture_report->hal_status = HAL_DCMI_Start_DMA(&hdcmi, DCMI_MODE_CONTINUOUS,
                                                    (uint32_t)capture, CAPTURE_BYTES / 4);
     if (camera_capture_report->hal_status != HAL_OK) return SetFailure(camera_capture_report, CAMERA_DMA);
-    uint32_t started = HAL_GetTick();
+    uint32_t capture_started_ms = HAL_GetTick();
     CameraFailure failure = CAMERA_OK;
-    uint32_t checked_bytes = 0;
+    size_t checked_bytes = 0;
     while (!capture_error) {
         const uint32_t dma_remaining = __HAL_DMA_GET_COUNTER(hdcmi.DMA_Handle);
         if (dma_remaining > CAPTURE_BYTES / 4U) { failure = CAMERA_DMA; break; }
@@ -582,10 +627,10 @@ static bool Capture(uint32_t timeout_ms)
             size_t offset, bytes;
             uint16_t width, height;
             __DMB();
-            if (CameraJPEG_Find((const uint8_t *)capture, received, &offset, &bytes, &width, &height)) break;
-            checked_bytes = received;
+            if (CameraJPEG_FindIncremental((const uint8_t *)capture, received, &checked_bytes,
+                                           &offset, &bytes, &width, &height)) break;
         }
-        if (HAL_GetTick() - started >= timeout_ms) { failure = CAMERA_TIMEOUT; break; }
+        if (HAL_GetTick() - capture_started_ms >= timeout_ms) { failure = CAMERA_TIMEOUT; break; }
         DelayMs(1);
     }
     if (capture_error) failure = CAMERA_DMA;
@@ -765,9 +810,8 @@ static void SaveFlowTrace(const char *video_name)
 
 static bool RecordVideo(void)
 {
-    /* First validated camera frame already exists. Do not create an empty
-     * movie when the sensor fails to start. Capture/write sequentially so
-     * no external SDRAM or unbounded recording buffer is required. */
+    /* First validated camera frame already exists. Capture and write one
+     * bounded frame at a time; create the movie only after capture succeeds. */
     /* Only one container is active. Bound stack use as the index grows. */
     union { CameraAVI avi; CameraMP4 mp4; } container;
     CameraAVI *avi=&container.avi;
@@ -829,7 +873,8 @@ static bool RecordVideo(void)
         if (commanded_recording && !RecordControl_HasTime()) break;
 #endif
         uint32_t frame_start = HAL_GetTick();
-        if ((i || commanded_recording) && camera_snapshot.probe_registers != 6U && !Capture(3000U)) { complete = false; break; }
+        if ((i || commanded_recording) && camera_snapshot.probe_registers != 6U &&
+            !Capture(3000U)) { complete = false; break; }
 #if CAMERA_FLOW_BENCH
         uint32_t frame_ready = HAL_GetTick();
         CameraFlowReference reference = {.imu_age_ms = UINT16_MAX, .tof_age_ms = UINT16_MAX};
@@ -1274,12 +1319,7 @@ void CameraSnapshot_Task(void *argument)
             camera_snapshot.video_uncompressed = camera_snapshot_video_uncompressed != 0;
             camera_snapshot.video_mp4 = camera_snapshot_video_mp4 != 0;
             bool direct_jpeg=!camera_snapshot.video_mp4 && !camera_snapshot.video_uncompressed;
-            output_width=direct_jpeg ? 640U : 320U;
-            output_height=direct_jpeg ? 480U : 240U;
-            camera_snapshot.frame_period_ms=direct_jpeg ? 67U : 250U;
-#if CAMERA_FLOW_BENCH
-            if (direct_jpeg) camera_snapshot.frame_period_ms = 50U;
-#endif
+            const bool output_valid = SelectOutput(direct_jpeg);
             camera_snapshot.video_requested = camera_snapshot_video_frames > CAMERA_AVI_MAX_FRAMES
                 ? CAMERA_AVI_MAX_FRAMES : camera_snapshot_video_frames;
             for (unsigned i = 0; i < 3U; ++i) camera_snapshot.bank_readback[i] = 0xFFFFFFFFU;
@@ -1288,15 +1328,17 @@ void CameraSnapshot_Task(void *argument)
                     ? "\r\nCAMERA: H.264 MP4 to SD\r\n"
                     : camera_snapshot.video_uncompressed
                     ? "\r\nCAMERA: uncompressed RGB24 AVI to SD\r\n"
-                    : "\r\nCAMERA: direct 640x480 MJPEG AVI to SD\r\n")
+                    : "\r\nCAMERA: direct MJPEG AVI to SD\r\n")
                 : "\r\nCAMERA: single JPEG to SD\r\n");
-            bool ok;
 #if CAMERA_USE_SDRAM
             Log("CAMERA: frame buffers in lower 2 MiB SDRAM\r\n");
-            if (camera_sdram.result != 1) ok = Fail(CAMERA_SDRAM);
-            else
 #endif
-            if (SCB->CCR & SCB_CCR_DC_Msk) ok = Fail(CAMERA_CACHE_ENABLED);
+            bool ok;
+            if (!output_valid) ok = Fail(CAMERA_RESOLUTION);
+#if CAMERA_USE_SDRAM
+            else if (camera_sdram.result != 1) ok = Fail(CAMERA_SDRAM);
+#endif
+            else if (SCB->CCR & SCB_CCR_DC_Msk) ok = Fail(CAMERA_CACHE_ENABLED);
             else if (camera_snapshot.probe_registers == 8U) ok = ProbeDCMIInput();
             else if (camera_snapshot.probe_registers == 6U) {
                 Log("CAMERA: SYNTHETIC STORAGE TEST; pattern is NOT a camera capture\r\n");

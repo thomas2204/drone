@@ -1,5 +1,131 @@
 # H743 camera recording
 
+## Approximately 10 FPS normal Debug profile (2026-11-27)
+
+Normal SDRAM Debug now defaults to native **800x600 MJPEG at a 100 ms target
+period**. JPEG quantization remains 20, so the speed tradeoff is resolution,
+not stronger compression. The 240 KiB SDRAM capture buffer is retained.
+Flow builds keep their calibrated 640x480 profile; software H.264/RGB24 stay
+320x240. The normal recording controls and Debug flash entry are unchanged.
+
+The capture loop scans only newly arrived DMA bytes for JPEG EOI candidates,
+then uses the existing full parser to validate the image. Split EOI markers,
+EOI-like APP metadata and recovery after a damaged JPEG have regression tests.
+SDRAM builds stage SD I/O in aligned 16 KiB chunks rather than 4 KiB; the
+internal-SRAM builds keep 4 KiB. No unvalidated cache changes are used.
+
+Connected-board comparisons, with real captures and SD readback verification:
+
+| Resolution | Frames | Duration | Average FPS |
+| --- | ---: | ---: | ---: |
+| 1600x1200 | 60 | 11914 ms | 5.04 |
+| 1280x960 | 60 | 11911 ms | 5.04 |
+| 1024x768 | 60 | 11902 ms | 5.04 |
+| 800x600 | 100 | 10026 ms | 9.97 |
+
+The 800x600 run verified all 3452174 JPEG payload bytes with no DMA, DCMI,
+SD or FatFs errors (VIDEO012.AVI). A DVP divider change from 12 to 8 did not
+improve full-resolution FPS. An experimental capture/write overlap also
+remained near 5 FPS and is not included in the final implementation. These
+tests do not establish that the camera hardware could never reach 10 FPS at
+UXGA; they show the limit of the configurations tested on this board.
+
+`camera_snapshot_jpeg_width` accepts 640, 800, 1024, 1280 or 1600 before a new
+request, with height at 3/4 of width. The larger modes remain available but
+did not meet 10 FPS in these tests. Flow/internal-SRAM builds permit only 640.
+800x600 has 56% more pixels than the original 640x480 recording, but 75% fewer
+pixels than 1600x1200. The source retains the original DVP timing profiles.
+
+Evidence: `build/camera-10fps-1600-result.txt`,
+`build/camera-10fps-1600-div8-result.txt`, `build/camera-10fps-1280-result.txt`,
+`build/camera-10fps-1024-result.txt`, `build/camera-10fps-800-result.txt` and
+`build/camera-10fps-host-tests.txt`. Earlier sections below describe the
+previous defaults and their validation results.
+
+The final default build repeated 100 frames in 10024 ms (9.98 FPS), verifying
+3495340 payload bytes. A camera-only session through the normal recording
+coordinator then saved **298 frames in 30000 ms (9.93 FPS)** and verified all
+10299756 JPEG payload bytes. Coordinator `active=0`, `failed=0`; camera DMA,
+DCMI, SD, FatFs, close and unmount results were zero. The coordinator was
+started through its debugger-visible request state with the same 30-second
+duration as `record cam`; no flight-control command was sent. Simultaneous
+thermal recording was not part of this FPS measurement.
+
+A separate four-frame 800x600 clip was exported from SD as
+`build/camera-10fps-video.avi` (150412 bytes). Header/index/RIFF checks agree,
+and FFmpeg decoded all frames with `-xerror`, exit 0. Final evidence:
+`build/camera-10fps-final-100-result.txt`,
+`build/camera-10fps-normal-complete-result.txt`,
+`build/camera-10fps-export-result.txt`,
+`build/camera-10fps-container-result.json` and `build/camera-10fps-decode.log`.
+Five host cases cover VGA, SVGA, XGA, 1280x960 and UXGA; normal Debug, SDRAM
+flow and internal-SRAM Release builds pass. Left the normal Debug firmware
+running with width 800, export/request disabled and frame-count setting 40;
+the temporary GDB server was stopped after detach. Flash was backed up before
+the first FPS trial to `build/before-10fps-flash.bin`.
+
+## Native 1600x1200 recording with SDRAM (2026-11-27)
+
+The normal Debug preset now defaults to 1600x1200 (UXGA) for OV2640 JPEG
+photos and direct MJPEG AVI. The capture buffer is 240 KiB in the tested lower
+2 MiB SDRAM region. Native UXGA sensor window/timing is retained from the
+[pinned Espressif driver](https://github.com/espressif/esp32-camera/blob/b3f7fe802f41f17fd7a104d517c53f1f62c8414d/sensors/private_include/ov2640_settings.h),
+including the output size's high bits and the UXGA JPEG DVP divider of 12.
+This captures the native sensor window rather than enlarging a VGA JPEG.
+
+Build and flash the usual **STM32Cube: Drone + MP4 camera (Debug)** entry.
+Direct MJPEG remains the default format despite the launch entry's older name.
+The unchanged 320x240 software H.264 and RGB24 modes use their existing buffers.
+Flow builds retain 640x480 to preserve their established tracking/calibration.
+
+Debugger variable `camera_snapshot_jpeg_width` selects 640, 800 or 1600 before
+the next JPEG/MJPEG request (height is 3/4 of width). SDRAM Debug defaults to
+1600; internal-SRAM and flow builds permit only 640. Unsupported settings
+report CAMERA_RESOLUTION (14). Nominal pacing is 200 ms for UXGA (5 FPS cap),
+100 ms for SVGA and 67 ms for VGA; capture and SD delays can reduce actual FPS.
+The existing ten-second recording command remains unchanged.
+
+Both capture and the AVI writer permit JPEG payloads up to 240 KiB. A capture
+larger than its bounded buffer reports overflow instead of claiming success.
+The DMA request is 61440 words, below its 65535-word single-transfer limit;
+larger HAL multi-buffer transfers are intentionally not used by the current
+NDTR accounting. SD writes continue through the aligned internal SRAM buffer.
+
+Regression coverage exercises JPEG parsing and finalized MJPEG AVI at VGA and
+UXGA, including a generated UXGA JPEG above the previous 128 KiB ceiling,
+recovery after a damaged JPEG, the frame-count limit and rejection above the
+new payload limit. FFmpeg decodes both generated clips. The normal Debug and
+SDRAM flow builds pass.
+
+On the connected board, a real 1600x1200 JPEG was saved as PHOTO001.JPG
+(85753 bytes), reread byte-for-byte, exported as `build/camera-uxga-photo.jpg`
+and decoded with Pillow. A 40-frame VIDEO005.AVI recording at 1600x1200 took
+9133 ms (4.38 FPS); all 4137446 payload bytes passed the recorder's SD
+readback/hash checks, with zero DMA/DCMI/storage errors. Capture took 6630 ms,
+SD writing 2316 ms and pacing 189 ms. This short bench run establishes the
+resolution/frame-rate tradeoff; it is not a sustained performance guarantee.
+
+VIDEO006.AVI was a separate two-frame export test. All 197823 payload bytes
+passed readback; the complete 198104-byte file was exported as
+`build/camera-uxga-video.avi`. Its finalized RIFF/header/index counts agree,
+and FFmpeg decoded both 1600x1200 frames with `-xerror`, exit 0. A request
+with unsupported width 1280 returned CAMERA_RESOLUTION before sensor
+transactions, DMA or SD writes (all counters zero).
+
+After that guard check, the final flashed Debug firmware recorded VIDEO007.AVI:
+40 frames in 9066 ms (4.41 FPS), 4194330 payload bytes verified, zero errors,
+and successful close/unmount. Left normal firmware running at width 1600,
+frame-count setting 40, no pending request and export disabled; disconnected
+the debugger and stopped the temporary server. Final report:
+`build/camera-uxga-final-result.txt`. Previous flash was backed up as
+`build/before-uxga-flash.bin` before the initial UXGA trial.
+
+Evidence: `build/camera-uxga-photo-result.txt`,
+`build/camera-uxga-video-result.txt`, `build/camera-uxga-export-result.txt`,
+`build/camera-uxga-container-result.json`, `build/camera-uxga-decode.log`,
+`build/camera-uxga-guard-result.txt` and `build/camera-uxga-host-test.txt`.
+The former VGA recordings documented below describe earlier configurations.
+
 ## Invalid thermal frame and false camera-timeout fix
 
 A live failure reproduced CAMERA_VERIFY (stage 8), CAMERA_TIMEOUT (error 4)
