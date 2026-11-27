@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Configure normal Debug firmware",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--preset", "Debug"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Build normal Debug firmware",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "--preset", "Debug"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "dependsOn": "Configure normal Debug firmware",
+            "problemMatcher": ["$gcc"],
+            "group": { "kind": "build", "isDefault": true }
+        }
+    ]
+}

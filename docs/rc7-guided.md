@@ -20,8 +20,8 @@ takeover. The STM32 reads RC7 over MAVLink and waits for confirmation that
   the controller has at least one second of healthy, settled telemetry
   with estimated vertical speed below 0.20 m/s in either direction.
   Keep the switch at Mid. With `WP_RFND_USE=1` and healthy rangefinder
-  terrain data, the takeoff command targets 50 cm above the floor. For
-  example, a starting TFmini reading of 15 cm gives a 35 cm climb.
+  terrain data, the takeoff command targets 55 cm above the floor. For
+  example, a starting TFmini reading of 15 cm gives a 40 cm climb.
   Guided stays in takeoff until the TFmini and EKF meet the steady hover
   conditions below for one second. The companion then holds a fixed
   vertical position target.
@@ -29,9 +29,9 @@ takeover. The STM32 reads RC7 over MAVLink and waits for confirmation that
   If the aircraft settles between 30 and 40 cm after confirmed liftoff,
   the companion holds the horizontal position and raises the altitude
   setpoint in steps of at most 1.5 cm, up to 20 cm total. It stops raising
-  the setpoint at a measured 48 cm. It requests Land if the adjustment
+  the setpoint at a measured 50 cm. It requests Land if the adjustment
   does not settle within eight seconds or leaves the 30–60 cm range.
-  After one steady second within 10 cm of target, with the range
+  After one steady second in the 40–60 cm hover band, with the range
   staying within 3 cm of its value at the start of that second and the
   EKF reporting low speed, it moves 1 m along the current heading.
   After settling at the endpoint, it returns to the horizontal position
@@ -49,8 +49,11 @@ targets on RC or heartbeat loss. When the link is healthy and the
 rangefinder or navigation estimate fails during the sequence, it requests
 Land. It also requests Land if the TFmini shows a rise of over 85 cm
 from the starting reading or if the EKF and TFmini height changes differ
-by more than 40 cm. A move that
-leaves the hover band drops back to holding position. The flight controller
+by more than 40 cm. If either horizontal leg dips below the hover band,
+the companion pauses horizontal motion and applies the same bounded
+height adjustment. It resumes toward the original endpoint after
+settling at 50 cm or higher. The leg timeout still runs during the pause.
+The flight controller
 retains its own arming checks and failsafes.
 
 Use the simulator first. The strip shows blue during the forward leg and

@@ -2,21 +2,23 @@
 
 ## OV2640 application trial (2026-11-27)
 
-An opt-in normal-application build now uses the lower 2 MiB for the OV2640
+The normal Debug application now uses the lower 2 MiB for the OV2640
 128 KiB JPEG capture buffer and 225 KiB decoded BGR buffer. This frees 353 KiB
 of AXI SRAM. Buffer sizes, recording commands and video formats are unchanged;
 this first integration does not add double buffering or claim higher FPS.
 FatFs objects and the aligned 4 KiB SD staging buffer remain in internal SRAM.
 
 ```powershell
-cmake --preset CameraSDRAM
-cmake --build --preset CameraSDRAM
+cmake --preset Debug
+cmake --build --preset Debug
 ```
 
-The preset inherits the normal Debug application settings. In VS Code select
-**STM32Cube: Drone + OV2640 SDRAM trial** to flash
-`build/CameraSDRAM/projects.elf`; build it explicitly before launching.
-Other presets retain `CAMERA_USE_SDRAM=OFF` unless explicitly enabled.
+In VS Code select **STM32Cube: Drone + MP4 camera (Debug)** to configure,
+build and flash `build/Debug/projects.elf` automatically. The Debug preset
+sets `CAMERA_USE_SDRAM=ON`, including presets inheriting Debug. The separate
+CameraSDRAM preset remains available for the earlier test build. Release and
+standalone diagnostic builds retain their existing settings; the CMake option
+defaults to OFF outside the Debug presets.
 
 At boot, after FMC initialization and before tasks start, the application sends
 the chip startup commands and programs refresh. It maps only

@@ -7,6 +7,20 @@
         {
             "type": "stlinkgdbtarget",
             "request": "launch",
+            "name": "STM32Cube: Drone + MP4 camera (Debug)",
+            "origin": "snippet",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build normal Debug firmware",
+            "runEntry": "main",
+            "imagesAndSymbols": [
+                {
+                    "imageFileName": "${workspaceFolder}/build/Debug/projects.elf"
+                }
+            ]
+        },
+        {
+            "type": "stlinkgdbtarget",
+            "request": "launch",
             "name": "STM32Cube: Drone + OV2640 SDRAM trial",
             "origin": "snippet",
             "cwd": "${workspaceFolder}",
@@ -14,19 +28,6 @@
             "imagesAndSymbols": [
                 {
                     "imageFileName": "${workspaceFolder}/build/CameraSDRAM/projects.elf"
-                }
-            ]
-        },
-        {
-            "type": "stlinkgdbtarget",
-            "request": "launch",
-            "name": "STM32Cube: Drone + MP4 camera (Debug)",
-            "origin": "snippet",
-            "cwd": "${workspaceFolder}",
-            "runEntry": "main",
-            "imagesAndSymbols": [
-                {
-                    "imageFileName": "${workspaceFolder}/build/Debug/projects.elf"
                 }
             ]
         },

@@ -15,6 +15,7 @@
             "inherits": "default",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
+                "CAMERA_USE_SDRAM": "ON",
                 "GPS_DIAGNOSTICS": "OFF",
                 "GPS_BDS_TEST_PROFILE": "0",
                 "GPS_MEASUREMENT_PERIOD_MS": "200",

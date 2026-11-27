@@ -5,8 +5,9 @@
 #define GUIDED 4U
 #define LAND 9U
 #define TAKEOFF_COMMAND 22U
-#define HOVER_HEIGHT_M 0.50f
+#define HOVER_HEIGHT_M 0.55f
 #define LIFTOFF_MIN_RISE_M 0.10f
+#define HOVER_BAND_CENTER_M 0.50f
 #define HOVER_HEIGHT_TOLERANCE_M 0.10f
 #define HOVER_RANGE_CHANGE_M 0.03f
 #define MAX_RISE_M 0.85f
@@ -14,7 +15,7 @@
 #define HOVER_ACQUIRE_TIMEOUT_MS 8000U
 #define TAKEOFF_MAX_VERTICAL_SPEED_M_S 0.20f
 #define LOW_HOVER_MIN_M 0.30f
-#define HEIGHT_ADJUST_STOP_M 0.48f
+#define HEIGHT_ADJUST_STOP_M 0.50f
 #define HEIGHT_ADJUST_STEP_M 0.015f
 #define HEIGHT_ADJUST_MAX_M 0.20f
 #define HEIGHT_ADJUST_STEP_MS 200U
@@ -62,6 +63,20 @@ static void hold_here(Rc7Guided *test, const PatrolInput *in)
     test->state = RC7_HOVER;
     test->target_x = test->command_x = in->x;
     test->target_y = test->command_y = in->y;
+    test->settling = false;
+}
+
+static void start_height_adjust(Rc7Guided *test, const PatrolInput *in,
+                                Rc7GuidedState resume_state, uint32_t now)
+{
+    test->state = RC7_HEIGHT_ADJUST;
+    test->resume_state = resume_state;
+    test->command_x = in->x;
+    test->command_y = in->y;
+    test->height_adjust_limit_z = in->z - HEIGHT_ADJUST_MAX_M;
+    test->target_z = resume_state == RC7_IDLE ? in->z :
+        fmaxf(test->height_adjust_limit_z, fminf(test->target_z, in->z));
+    test->height_adjust_started_ms = test->height_adjust_ms = now;
     test->settling = false;
 }
 
@@ -123,12 +138,16 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
          (in->ack_serial != test->ack_serial && in->ack_command == TAKEOFF_COMMAND &&
           in->ack_result != 0U && in->ack_result != 5U)))
         start_landing(test, now);
-    if (test->state == RC7_HEIGHT_ADJUST &&
-        (now - test->started_ms >= HEIGHT_ADJUST_TIMEOUT_MS || in->on_ground ||
-         in->height < LOW_HOVER_MIN_M || in->height >= HOVER_HEIGHT_M + HOVER_HEIGHT_TOLERANCE_M))
+    const bool moving = test->state == RC7_FORWARD || test->state == RC7_RETURN;
+    const bool adjusting = test->state == RC7_HEIGHT_ADJUST;
+    if (adjusting &&
+        (now - test->height_adjust_started_ms >= HEIGHT_ADJUST_TIMEOUT_MS || in->on_ground ||
+         in->height < LOW_HOVER_MIN_M || in->height >= HOVER_BAND_CENTER_M + HOVER_HEIGHT_TOLERANCE_M))
         start_landing(test, now);
-    if ((test->state == RC7_FORWARD || test->state == RC7_RETURN) &&
+    if ((moving || (adjusting && test->resume_state != RC7_IDLE)) &&
         now - test->started_ms >= LEG_TIMEOUT_MS)
+        start_landing(test, now);
+    if (moving && (in->on_ground || in->height < LOW_HOVER_MIN_M))
         start_landing(test, now);
     if (edge == SWITCH_HIGH) test->forward_used = true;
     if (test->state == RC7_HOVER && !test->forward_used &&
@@ -141,7 +160,7 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
         return (PatrolAction){.type = PATROL_SET_MODE, .mode = LAND};
     }
 
-    const bool height_in_band = fabsf(in->height - HOVER_HEIGHT_M) < HOVER_HEIGHT_TOLERANCE_M;
+    const bool height_in_band = fabsf(in->height - HOVER_BAND_CENTER_M) < HOVER_HEIGHT_TOLERANCE_M;
     const bool low_hover = test->state == RC7_TAKEOFF && !height_in_band &&
         in->height < HOVER_HEIGHT_M && in->height >= LOW_HOVER_MIN_M &&
         in->height - initial_height >= LIFTOFF_MIN_RISE_M &&
@@ -164,10 +183,7 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
         hold_here(test, in);
         test->started_ms = now;
         if (low_hover) {
-            test->state = RC7_HEIGHT_ADJUST;
-            test->target_z = in->z;
-            test->height_adjust_limit_z = in->z - HEIGHT_ADJUST_MAX_M;
-            test->height_adjust_ms = now;
+            start_height_adjust(test, in, RC7_IDLE, now);
         } else {
             test->target_z = in->z + (in->height - HOVER_HEIGHT_M);
         }
@@ -179,8 +195,13 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
             /* Drop any accumulated command lead as the measured height approaches target. */
             test->target_z = fmaxf(test->target_z, in->z + (in->height - HOVER_HEIGHT_M));
             if (settled) {
-                hold_here(test, in);
-                test->started_ms = now;
+                if (test->resume_state == RC7_IDLE) {
+                    hold_here(test, in);
+                    test->started_ms = now;
+                } else {
+                    test->state = test->resume_state;
+                    test->settling = false;
+                }
             }
         } else if (now - test->height_adjust_ms >= HEIGHT_ADJUST_STEP_MS &&
                    fabsf(in->vz) < 0.15f && hypotf(in->vx, in->vy) < 0.15f &&
@@ -191,8 +212,13 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
             test->height_adjust_ms = now;
         }
     } else if (test->state == RC7_FORWARD || test->state == RC7_RETURN) {
-        if (edge == SWITCH_HIGH || !height_in_band) {
+        if (edge == SWITCH_HIGH) {
             hold_here(test, in);
+        } else if (!height_in_band) {
+            if (in->height < HOVER_HEIGHT_M)
+                start_height_adjust(test, in, test->state, now);
+            else
+                hold_here(test, in);
         } else if (settled &&
                    hypotf(in->x - test->target_x, in->y - test->target_y) < POSITION_TOLERANCE_M &&
                    test->command_x == test->target_x && test->command_y == test->target_y) {
@@ -223,7 +249,8 @@ PatrolAction Rc7Guided_Update(Rc7Guided *test, const PatrolInput *in,
     const float dx = test->target_x - test->command_x;
     const float dy = test->target_y - test->command_y;
     const float distance = hypotf(dx, dy);
-    if (hypotf(test->command_x - in->x, test->command_y - in->y) < POSITION_TOLERANCE_M) {
+    if (test->state != RC7_HEIGHT_ADJUST &&
+        hypotf(test->command_x - in->x, test->command_y - in->y) < POSITION_TOLERANCE_M) {
         if (distance > POSITION_STEP_M) {
             const float fraction = POSITION_STEP_M / distance;
             test->command_x += dx * fraction;

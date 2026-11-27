@@ -14,11 +14,11 @@ typedef enum {
 } Rc7GuidedState;
 
 typedef struct {
-    Rc7GuidedState state;
+    Rc7GuidedState state, resume_state;
     uint8_t pending_switch, stable_switch;
     bool saw_low, forward_used, settling, settling_low, start_qualified;
     uint32_t switch_ms, started_ms, settled_ms, qualified_ms, land_send_ms, ack_serial;
-    uint32_t height_adjust_ms;
+    uint32_t height_adjust_ms, height_adjust_started_ms;
     float origin_x, origin_y, origin_z, floor_reference;
     float settling_height, height_adjust_limit_z;
     float target_x, target_y, target_z, yaw, command_x, command_y;
